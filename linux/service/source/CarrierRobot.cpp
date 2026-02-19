@@ -2,6 +2,8 @@
 // Created by luocf on 2019/6/13.
 //
 #include <cstring>
+#include <algorithm>
+#include <cctype>
 #include <future>
 #include <stack>
 #include <iostream>
@@ -24,6 +26,32 @@ using namespace std;
 namespace chatrobot {
     using json = nlohmann::json;
     std::string CarrierRobot::Factory::sLocalDataDir;
+
+    namespace {
+        std::string trimDisplayName(const std::string &value) {
+            size_t begin = 0;
+            while (begin < value.size()
+                   && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+                ++begin;
+            }
+            size_t end = value.size();
+            while (end > begin
+                   && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+                --end;
+            }
+            return value.substr(begin, end - begin);
+        }
+
+        std::string buildFallbackUserName(const char *friendid) {
+            if (friendid == nullptr || friendid[0] == '\0') {
+                return "CarrierUser";
+            }
+
+            std::string friend_id(friendid);
+            return std::string("CarrierUser-")
+                   + friend_id.substr(0, std::min<size_t>(8, friend_id.size()));
+        }
+    }
 
     /***********************************************/
     /***** static function implement ***************/
@@ -98,10 +126,82 @@ namespace chatrobot {
         mCarrieryThread = std::thread(&CarrierRobot::runCarrierInner, this); //引用
     }
 
+    std::shared_ptr<std::string> CarrierRobot::resolveGroupDisplayName(int service_id) {
+        std::string display_name;
+        auto group_nickname = mDatabaseProxy->getGroupNickName();
+        if (group_nickname.get() != nullptr) {
+            display_name = trimDisplayName(*group_nickname.get());
+        }
+
+        if (display_name.empty()) {
+            std::string base_name = "CarrierGroup";
+            if (mCarrierConfig.get() != nullptr
+                && mCarrierConfig->NickName.get() != nullptr) {
+                std::string configured_name = trimDisplayName(*mCarrierConfig->NickName.get());
+                if (!configured_name.empty()) {
+                    base_name = configured_name;
+                }
+            }
+            display_name = base_name + "-" + std::to_string(service_id);
+        }
+
+        if (display_name.size() > ELA_MAX_USER_NAME_LEN) {
+            display_name.resize(ELA_MAX_USER_NAME_LEN);
+        }
+        return std::make_shared<std::string>(display_name);
+    }
+
+    std::shared_ptr<std::string> CarrierRobot::resolveMemberDisplayName(const char *friendid,
+                                                                         const char *display_name) {
+        std::string normalized_name;
+        if (display_name != nullptr) {
+            normalized_name = trimDisplayName(std::string(display_name));
+        }
+        if (normalized_name.empty()) {
+            normalized_name = buildFallbackUserName(friendid);
+        }
+        if (normalized_name.size() > ELA_MAX_USER_NAME_LEN) {
+            normalized_name.resize(ELA_MAX_USER_NAME_LEN);
+        }
+        return std::make_shared<std::string>(normalized_name);
+    }
+
+    int CarrierRobot::applySelfDisplayName(int service_id) {
+        std::shared_ptr<std::string> display_name = resolveGroupDisplayName(service_id);
+        if (display_name.get() == nullptr || display_name->empty()) {
+            return 0;
+        }
+
+        ElaUserInfo self_info;
+        memset(&self_info, 0, sizeof(self_info));
+        int ret = ela_get_self_info(mCarrier.get(), &self_info);
+        if (ret != 0) {
+            Log::I(TAG, "applySelfDisplayName failed to get self info, errno:(0x%x)", ela_get_error());
+            return ret;
+        }
+
+        if (std::string(self_info.name) == *display_name.get()) {
+            return 0;
+        }
+
+        strncpy(self_info.name, display_name->c_str(), ELA_MAX_USER_NAME_LEN);
+        self_info.name[ELA_MAX_USER_NAME_LEN] = '\0';
+        ret = ela_set_self_info(mCarrier.get(), &self_info);
+        if (ret != 0) {
+            Log::I(TAG, "applySelfDisplayName failed to set self info, errno:(0x%x)", ela_get_error());
+            return ret;
+        }
+
+        mDatabaseProxy->updateGroupNickName(display_name);
+        return 0;
+    }
+
     void CarrierRobot::OnCarrierFriendInfoChanged(ElaCarrier *carrier, const char *friendid,
                                                   const ElaFriendInfo *info, void *context) {
         auto carrier_robot = reinterpret_cast<CarrierRobot *>(context);
-        std::shared_ptr<std::string> nickanme = std::make_shared<std::string>(info->user_info.name);
+        const char *raw_name = info != nullptr ? info->user_info.name : nullptr;
+        std::shared_ptr<std::string> nickanme = carrier_robot->resolveMemberDisplayName(friendid,
+                                                                                         raw_name);
         carrier_robot->updateMemberInfo(std::make_shared<std::string>(friendid), nickanme,
                                         ElaConnectionStatus_Connected);
     }
@@ -134,12 +234,9 @@ namespace chatrobot {
         if (!carrier_robot->inRemovedList(std::make_shared<std::string>(friendid))) {
             ElaFriendInfo info;
             int ret = ela_get_friend_info(carrier, friendid, &info);
-            std::shared_ptr<std::string> nickanme;
-            if (ret == 0) {
-                nickanme = std::make_shared<std::string>(info.user_info.name);
-            } else {
-                nickanme = std::make_shared<std::string>("");
-            }
+            const char *raw_name = ret == 0 ? info.user_info.name : nullptr;
+            std::shared_ptr<std::string> nickanme = carrier_robot->resolveMemberDisplayName(friendid,
+                                                                                             raw_name);
             carrier_robot->updateMemberInfo(std::make_shared<std::string>(friendid), nickanme, status);
 
         }
@@ -313,6 +410,11 @@ namespace chatrobot {
             ela_get_strerror(err, strerr_buf, sizeof(strerr_buf));
             Log::E(Log::TAG, "CarrierRobot::start failed! ret=%s(0x%x)", strerr_buf, err);
             return ErrCode::FailedCarrier;
+        }
+
+        int name_ret = applySelfDisplayName(service_id);
+        if (name_ret != 0) {
+            Log::I(TAG, "CarrierRobot::start continue with default self info, err=%d", name_ret);
         }
         std::shared_ptr<MemberInfo> member_info = mDatabaseProxy->getMemberInfo(1);
         if (member_info.get() != nullptr) {

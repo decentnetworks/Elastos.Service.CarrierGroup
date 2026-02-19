@@ -4,11 +4,13 @@
 from flask import Flask, abort, request, jsonify,make_response
 from flask_cors import CORS
 import argparse
+from pathlib import Path
 import chatrobot_restful_api as chatrobot
 
-def start(data_dir):
+def start(manager_ip, manager_port, data_dir):
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
     print(data_dir)
-    chatrobot.start("127.0.0.1", 3333, data_dir)
+    chatrobot.start(manager_ip, manager_port, data_dir)
 app = Flask(__name__)
 CORS(app, resource={r"/*":{"orgins":"*"}}, supports_credentials=True)
 @app.route("/")
@@ -30,13 +32,15 @@ def list_groups():
 parser = argparse.ArgumentParser()
 parser.add_argument('--ip', type=str, default="127.0.0.1")
 parser.add_argument('--port', type=int, default=5000)
-parser.add_argument('--data_path', type=str, default="/home/lcf/workspace/testData/")
+parser.add_argument('--manager_ip', type=str, default="127.0.0.1")
+parser.add_argument('--manager_port', type=int, default=3333)
+default_data_path = str((Path(__file__).resolve().parent.parent / "runtime_data").resolve())
+parser.add_argument('--data_path', type=str, default=default_data_path)
 args = parser.parse_args();
 
 if __name__ == "__main__":
     # 将host设置为0.0.0.0，则外网用户也可以访问到这个服务
-    start(args.data_path)
+    start(args.manager_ip, args.manager_port, args.data_path)
     print("start in************************************8")
-    app.run(host=args.ip, port=5000)
-
+    app.run(host=args.ip, port=args.port)
 

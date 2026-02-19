@@ -83,3 +83,8 @@ android/repositories
 android/.build-cache
 
 bsdiff-tmp
+
+# local runtime artifacts
+linux/ui/runtime_data/
+linux/ui/venv_chatrobot/
+linux/ui/appserver/nohup.out

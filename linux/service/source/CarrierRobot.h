@@ -72,6 +72,10 @@ namespace chatrobot {
         int getGroupStatus();
         void registerCarrierCallBack(const std::function<void(const std::string)> &carrierCallBack);
     private:
+        std::shared_ptr<std::string> resolveGroupDisplayName(int service_id);
+        std::shared_ptr<std::string> resolveMemberDisplayName(const char *friendid, const char *display_name);
+        int applySelfDisplayName(int service_id);
+
         static CarrierRobot* instance;
 
         explicit CarrierRobot();
