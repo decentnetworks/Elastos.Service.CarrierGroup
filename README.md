@@ -79,6 +79,13 @@ cp build/service/carrierService linux/ui/appserver/carrierService
 Edit:
 
 - `linux/ui/appserver/chatrobot_config.ini`
+- template: `linux/ui/appserver/chatrobot_config.example.ini`
+
+Create from template:
+
+```bash
+cp linux/ui/appserver/chatrobot_config.example.ini linux/ui/appserver/chatrobot_config.ini
+```
 
 Example:
 
