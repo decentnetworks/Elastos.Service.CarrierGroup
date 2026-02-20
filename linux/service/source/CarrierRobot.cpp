@@ -28,6 +28,9 @@ namespace chatrobot {
     std::string CarrierRobot::Factory::sLocalDataDir;
 
     namespace {
+        constexpr const char *kAgentOutboundPrefix = "CGP1 ";
+        constexpr const char *kAgentReplyPrefix = "CGR1 ";
+
         std::string trimDisplayName(const std::string &value) {
             size_t begin = 0;
             while (begin < value.size()
@@ -50,6 +53,85 @@ namespace chatrobot {
             std::string friend_id(friendid);
             return std::string("CarrierUser-")
                    + friend_id.substr(0, std::min<size_t>(8, friend_id.size()));
+        }
+
+        bool startsWith(const std::string &value, const char *prefix) {
+            const size_t prefix_len = strlen(prefix);
+            return value.size() >= prefix_len
+                   && value.compare(0, prefix_len, prefix) == 0;
+        }
+
+        std::string normalizeProtocolToken(const std::string &value) {
+            std::string normalized;
+            normalized.reserve(value.size());
+            for (char ch : value) {
+                unsigned char uch = static_cast<unsigned char>(ch);
+                if (std::isalnum(uch) == 0) {
+                    continue;
+                }
+                normalized.push_back(static_cast<char>(std::tolower(uch)));
+            }
+            return normalized;
+        }
+
+        std::string sanitizeJsonPayload(const std::string &value) {
+            std::string sanitized;
+            sanitized.reserve(value.size());
+            for (char ch : value) {
+                unsigned char uch = static_cast<unsigned char>(ch);
+                if (uch < 0x20 && ch != '\t' && ch != '\n' && ch != '\r') {
+                    continue;
+                }
+                sanitized.push_back(ch);
+            }
+            return sanitized;
+        }
+
+        const char *connectionStatusToString(ElaConnectionStatus status) {
+            switch (status) {
+                case ElaConnectionStatus_Connected:
+                    return "connected";
+                case ElaConnectionStatus_Disconnected:
+                    return "disconnected";
+                default:
+                    return "unknown";
+            }
+        }
+
+        const char *presenceStatusToString(ElaPresenceStatus presence) {
+            switch (presence) {
+                case ElaPresenceStatus_None:
+                    return "none";
+                case ElaPresenceStatus_Away:
+                    return "away";
+                case ElaPresenceStatus_Busy:
+                    return "busy";
+                default:
+                    return "unknown";
+            }
+        }
+
+        json buildUserInfoJson(const ElaUserInfo &user_info) {
+            json user;
+            user["userid"] = user_info.userid;
+            user["name"] = user_info.name;
+            user["description"] = user_info.description;
+            user["has_avatar"] = user_info.has_avatar;
+            user["gender"] = user_info.gender;
+            user["phone"] = user_info.phone;
+            user["email"] = user_info.email;
+            user["region"] = user_info.region;
+            return user;
+        }
+
+        json buildFriendInfoJson(const ElaFriendInfo &friend_info) {
+            json info;
+            info["label"] = friend_info.label;
+            info["status"] = static_cast<int>(friend_info.status);
+            info["status_text"] = connectionStatusToString(friend_info.status);
+            info["presence"] = static_cast<int>(friend_info.presence);
+            info["presence_text"] = presenceStatusToString(friend_info.presence);
+            return info;
         }
     }
 
@@ -288,21 +370,14 @@ namespace chatrobot {
                 for (int i = 0; i < message_list->size(); i++) {
                     std::shared_ptr<MessageInfo> message = message_list->at(i);
                     if (message.get() != nullptr) {
-                        char msg[1024];
-                        std::shared_ptr<chatrobot::MemberInfo> target_memberInfo = mDatabaseProxy->getMemberInfo(
-                                message->mFriendid);
-                        if (target_memberInfo.get() != nullptr) {
-                            target_memberInfo->Lock();
-                            sprintf(msg, "%s: %s \n[%s]",
-                                    target_memberInfo->mNickName.get()->c_str(),
-                                    message->mMsg.get()->c_str(),
-                                    this->convertDatetimeToString(message->mSendTimeStamp).c_str());
-                            target_memberInfo->UnLock();
+                        std::string msg = buildOutboundMessageForRecipient(
+                                *memberInfo->mFriendid.get(), message);
+                        if (msg.empty()) {
+                            continue;
                         }
-
                         int msg_ret = ela_send_friend_message(mCarrier.get(),
                                                               memberInfo->mFriendid.get()->c_str(),
-                                                              msg, strlen(msg));
+                                                              msg.c_str(), msg.size());
                         if (msg_ret != 0) {
                             break;
                         }
@@ -323,7 +398,7 @@ namespace chatrobot {
     void CarrierRobot::addMessgae(std::shared_ptr<std::string> friend_id,
                                   std::shared_ptr<std::string> message, std::time_t send_time) {
         std::string errMsg;
-        std::string msg = *message.get();
+        std::string msg = normalizeIncomingMessageForStorage(*friend_id.get(), *message.get());
         if (msg.size() > 38 &&
             std::regex_match(msg.substr(0, 37).c_str(), *mMsgReg.get()) == true) {
             msg = msg.substr(38);//包含空格
@@ -602,6 +677,190 @@ namespace chatrobot {
 
     std::shared_ptr<std::string> CarrierRobot::getAgentAddressByUserId(const std::string &user_id) {
         return mDatabaseProxy->getAgentAddress(user_id);
+    }
+
+    std::string CarrierRobot::normalizeIncomingMessageForStorage(const std::string &friend_id,
+                                                                 const std::string &message) {
+        if (!mDatabaseProxy->hasAgent(friend_id)) {
+            return message;
+        }
+        if (!startsWith(message, kAgentReplyPrefix)) {
+            return message;
+        }
+
+        const std::string raw_payload = message.substr(strlen(kAgentReplyPrefix));
+        try {
+            json payload;
+            try {
+                payload = json::parse(raw_payload);
+            } catch (...) {
+                payload = json::parse(sanitizeJsonPayload(raw_payload));
+            }
+
+            auto type_it = payload.find("type");
+            if (type_it != payload.end()
+                && type_it->is_string()) {
+                const std::string type_value = normalizeProtocolToken(type_it->get<std::string>());
+                if (type_value != "carriergroupreply") {
+                    return message;
+                }
+            }
+
+            std::string chat_type_value;
+            auto chat_type_it = payload.find("chat_type");
+            if (chat_type_it != payload.end()
+                && chat_type_it->is_string()) {
+                chat_type_value = chat_type_it->get<std::string>();
+            } else {
+                auto compat_chat_type_it = payload.find("chattype");
+                if (compat_chat_type_it != payload.end()
+                    && compat_chat_type_it->is_string()) {
+                    chat_type_value = compat_chat_type_it->get<std::string>();
+                }
+            }
+            if (!chat_type_value.empty()
+                && normalizeProtocolToken(chat_type_value) != "group") {
+                return message;
+            }
+
+            auto group_it = payload.find("group");
+            if (group_it != payload.end() && group_it->is_object()) {
+                auto group_address_it = group_it->find("address");
+                if (group_address_it != group_it->end()
+                    && group_address_it->is_string()
+                    && !mAddress.empty()
+                    && group_address_it->get<std::string>() != mAddress) {
+                    return message;
+                }
+            }
+
+            std::string reply_text;
+            auto message_it = payload.find("message");
+            if (message_it != payload.end() && message_it->is_object()) {
+                auto text_it = message_it->find("text");
+                if (text_it != message_it->end() && text_it->is_string()) {
+                    reply_text = text_it->get<std::string>();
+                }
+            } else if (message_it != payload.end() && message_it->is_string()) {
+                reply_text = message_it->get<std::string>();
+            }
+            if (reply_text.empty()) {
+                auto text_it = payload.find("text");
+                if (text_it != payload.end() && text_it->is_string()) {
+                    reply_text = text_it->get<std::string>();
+                }
+            }
+            if (reply_text.empty()) {
+                return message;
+            }
+
+            auto reply_to_it = payload.find("reply_to");
+            if (reply_to_it != payload.end() && reply_to_it->is_object()) {
+                auto user_id_it = reply_to_it->find("userid");
+                if ((user_id_it == reply_to_it->end() || !user_id_it->is_string())) {
+                    user_id_it = reply_to_it->find("userId");
+                }
+                if ((user_id_it == reply_to_it->end() || !user_id_it->is_string())) {
+                    user_id_it = reply_to_it->find("friendid");
+                }
+                if (user_id_it != reply_to_it->end() && user_id_it->is_string()) {
+                    std::shared_ptr<std::string> reply_user_id = std::make_shared<std::string>(user_id_it->get<std::string>());
+                    std::shared_ptr<MemberInfo> target_member = mDatabaseProxy->getMemberInfo(reply_user_id);
+                    if (target_member.get() != nullptr && target_member->mNickName.get() != nullptr) {
+                        target_member->Lock();
+                        std::string target_name = *target_member->mNickName.get();
+                        target_member->UnLock();
+                        if (!target_name.empty()) {
+                            reply_text = std::string("@") + target_name + " " + reply_text;
+                        }
+                    }
+                }
+            }
+            return reply_text;
+        } catch (...) {
+            return message;
+        }
+    }
+
+    std::string CarrierRobot::buildOutboundMessageForRecipient(const std::string &recipient_user_id,
+                                                               std::shared_ptr<MessageInfo> message) {
+        if (message.get() == nullptr || message->mMsg.get() == nullptr || message->mFriendid.get() == nullptr) {
+            return "";
+        }
+
+        std::string sender_user_id = *message->mFriendid.get();
+        std::string sender_nickname = buildFallbackUserName(sender_user_id.c_str());
+        ElaFriendInfo sender_friend_info;
+        bool has_sender_friend_info = false;
+        memset(&sender_friend_info, 0, sizeof(sender_friend_info));
+        if (ela_get_friend_info(mCarrier.get(), sender_user_id.c_str(), &sender_friend_info) == 0) {
+            has_sender_friend_info = true;
+            if (sender_friend_info.user_info.name[0] != '\0') {
+                sender_nickname = sender_friend_info.user_info.name;
+            }
+        }
+
+        std::shared_ptr<MemberInfo> sender_member_info = mDatabaseProxy->getMemberInfo(message->mFriendid);
+        if (sender_member_info.get() != nullptr) {
+            sender_member_info->Lock();
+            if (sender_member_info->mNickName.get() != nullptr
+                && !sender_member_info->mNickName->empty()) {
+                sender_nickname = *sender_member_info->mNickName.get();
+            }
+            sender_member_info->UnLock();
+        }
+
+        std::string plain_text = sender_nickname + ": " + *message->mMsg.get()
+                                 + " \n[" + this->convertDatetimeToString(message->mSendTimeStamp) + "]";
+        if (!mDatabaseProxy->hasAgent(recipient_user_id)) {
+            return plain_text;
+        }
+
+        json envelope;
+        envelope["type"] = "carrier_group_message";
+        envelope["version"] = 1;
+        envelope["chat_type"] = "group";
+        envelope["source"] = "carrier_group_service";
+        envelope["group"]["address"] = mAddress;
+        std::string group_user_id;
+        if (getUserId(group_user_id) == 0) {
+            envelope["group"]["userid"] = group_user_id;
+        }
+        std::shared_ptr<std::string> group_nickname = mDatabaseProxy->getGroupNickName();
+        envelope["group"]["nickname"] = group_nickname.get() != nullptr ? *group_nickname.get() : "";
+        envelope["origin"]["userid"] = sender_user_id;
+        envelope["origin"]["friendid"] = sender_user_id;
+        envelope["origin"]["nickname"] = sender_nickname;
+        if (has_sender_friend_info) {
+            envelope["origin"]["user_info"] = buildUserInfoJson(sender_friend_info.user_info);
+            envelope["origin"]["friend_info"] = buildFriendInfoJson(sender_friend_info);
+        } else {
+            envelope["origin"]["user_info"]["userid"] = sender_user_id;
+            envelope["origin"]["user_info"]["name"] = sender_nickname;
+            envelope["origin"]["user_info"]["description"] = "";
+            envelope["origin"]["user_info"]["has_avatar"] = 0;
+            envelope["origin"]["user_info"]["gender"] = "";
+            envelope["origin"]["user_info"]["phone"] = "";
+            envelope["origin"]["user_info"]["email"] = "";
+            envelope["origin"]["user_info"]["region"] = "";
+
+            int status_code = 1;
+            if (sender_member_info.get() != nullptr) {
+                status_code = sender_member_info->mStatus;
+            }
+            ElaConnectionStatus status = status_code == 0
+                                         ? ElaConnectionStatus_Connected
+                                         : ElaConnectionStatus_Disconnected;
+            envelope["origin"]["friend_info"]["label"] = "";
+            envelope["origin"]["friend_info"]["status"] = status_code;
+            envelope["origin"]["friend_info"]["status_text"] = connectionStatusToString(status);
+            envelope["origin"]["friend_info"]["presence"] = static_cast<int>(ElaPresenceStatus_None);
+            envelope["origin"]["friend_info"]["presence_text"] = presenceStatusToString(ElaPresenceStatus_None);
+        }
+        envelope["message"]["text"] = *message->mMsg.get();
+        envelope["message"]["timestamp"] = static_cast<long long>(message->mSendTimeStamp);
+        envelope["render"]["plain"] = plain_text;
+        return std::string(kAgentOutboundPrefix) + envelope.dump();
     }
 
     bool CarrierRobot::isGroupCreator(const std::string &friend_id) {

@@ -127,6 +127,18 @@ curl "http://127.0.0.1:5000/agent/remove?group_id=1&userid=6z2o8ojPVjFGRzcffUdd5
 
 Important: quote URLs containing `&` so shell does not background the command.
 
+## Group-Agent Protocol
+
+- Protocol/design doc for sender attribution and reply routing:
+  - `docs/AGENT_GROUP_MESSAGE_PROTOCOL.md`
+- Agent recipients get `CGP1 <json>` envelope including:
+  - `chat_type=group`, `source=carrier_group_service` (explicit group classification)
+  - `group.userid`, `group.address`, `group.nickname`
+  - `origin.userid`/`origin.friendid`/`origin.nickname`
+  - `origin.user_info` + `origin.friend_info` (from Carrier `ElaFriendInfo` when available)
+  - `message.text`, `message.timestamp`, `render.plain`
+- Inbound `CGR1` parsing accepts compatibility variants (`carriergroupreply`, `chattype`) and sanitizes stray control bytes before JSON parse fallback.
+
 ## Group Chat Commands
 
 - `/agent add <carrier-address>` or `/agent <carrier-address>`: creator-only, add/register an OpenClaw agent.

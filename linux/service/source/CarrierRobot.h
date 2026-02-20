@@ -83,6 +83,10 @@ namespace chatrobot {
         bool requestAgentFriend(const std::string &address, std::string &error_message);
         void sendCommandResponse(const std::string &friend_id, const std::string &message);
         bool isGroupCreator(const std::string& friend_id);
+        std::string normalizeIncomingMessageForStorage(const std::string& friend_id,
+                                                       const std::string& message);
+        std::string buildOutboundMessageForRecipient(const std::string& recipient_user_id,
+                                                     std::shared_ptr<MessageInfo> message);
 
         static CarrierRobot* instance;
 
