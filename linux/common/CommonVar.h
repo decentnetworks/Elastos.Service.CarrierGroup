@@ -12,6 +12,8 @@
     constexpr int Command_UpdateNickName = 4;
     constexpr int Command_UpdateStatus = 5;
     constexpr int Command_WatchDog = 6;
+    constexpr int Command_AgentAdd = 7;
+    constexpr int Command_AgentRemove = 8;
     constexpr int CONST_ERROR_CODE_MAX_NUM = -1;
 
 #endif //CHATROBOT_COMMON_VAR_H

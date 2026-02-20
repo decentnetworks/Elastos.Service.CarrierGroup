@@ -454,6 +454,61 @@ namespace chatrobot {
         return 0;
     }
 
+    bool CarrierRobot::requestAgentFriend(const std::string &address, std::string &error_message) {
+        std::string agent_user_id;
+        int parse_ret = GetCarrierUsrIdByAddress(address, agent_user_id);
+        if (parse_ret != 0 || agent_user_id.empty()) {
+            error_message = "invalid carrier address";
+            return false;
+        }
+
+        if (!mAddress.empty()
+            && mAddress == address) {
+            error_message = "cannot use the group address as agent";
+            return false;
+        }
+
+        if (mDatabaseProxy->hasAgent(agent_user_id)) {
+            mDatabaseProxy->addAgent(agent_user_id, address);
+            return true;
+        }
+
+        std::shared_ptr<MemberInfo> agent_member = mDatabaseProxy->getMemberInfo(
+                std::make_shared<std::string>(agent_user_id));
+        if (agent_member.get() != nullptr) {
+            return true;
+        }
+
+        ElaFriendInfo carrier_friend_info;
+        memset(&carrier_friend_info, 0, sizeof(carrier_friend_info));
+        if (ela_get_friend_info(mCarrier.get(), agent_user_id.c_str(), &carrier_friend_info) == 0) {
+            mDatabaseProxy->addAgent(agent_user_id, address);
+            return true;
+        }
+
+        std::shared_ptr<MemberInfo> agent_block_member = mDatabaseProxy->getBlockMemberInfo(
+                std::make_shared<std::string>(agent_user_id));
+        if (agent_block_member.get() != nullptr) {
+            error_message = "target agent user is blocked in this group";
+            return false;
+        }
+
+        int add_ret = ela_add_friend(mCarrier.get(), address.c_str(), "openclaw agent invite");
+        if (add_ret != 0) {
+            int err = ela_get_error();
+            char strerr_buf[512] = {0};
+            ela_get_strerror(err, strerr_buf, sizeof(strerr_buf));
+            error_message = std::string("failed to add agent friend: ") + strerr_buf;
+            return false;
+        }
+
+        if (!mDatabaseProxy->addAgent(agent_user_id, address)) {
+            error_message = "friend request sent, but failed to save agent metadata";
+            return false;
+        }
+        return true;
+    }
+
     int CarrierRobot::getAddress(std::string &address) {
         char addr[ELA_MAX_ADDRESS_LEN + 1] = {0};
         auto ret = ela_get_address(mCarrier.get(), addr, sizeof(addr));
@@ -504,6 +559,54 @@ namespace chatrobot {
                 secondStr);// 将年月日时分秒合并。
         std::string str(s);                             // 定义string变量，并将总日期时间char*变量作为构造函数的参数传入。
         return str;                                // 返回转换日期时间后的string变量。
+    }
+
+    void CarrierRobot::sendCommandResponse(const std::string &friend_id, const std::string &message) {
+        int ela_ret = ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+                                              message.c_str(), strlen(message.c_str()));
+        if (ela_ret != 0) {
+            Log::I(Log::TAG,
+                   "sendCommandResponse .c_str(): %s errno:(0x%x)",
+                   message.c_str(), ela_get_error());
+        }
+    }
+
+    bool CarrierRobot::addAgentByAddress(const std::string &address, std::string &error_message) {
+        return requestAgentFriend(address, error_message);
+    }
+
+    bool CarrierRobot::removeAgentByUserId(const std::string &user_id, std::string &error_message) {
+        if (!mDatabaseProxy->hasAgent(user_id)) {
+            error_message = "agent userid not found in this group";
+            return false;
+        }
+
+        int remove_ret = ela_remove_friend(mCarrier.get(), user_id.c_str());
+        bool db_removed = mDatabaseProxy->removeAgent(user_id);
+        if (!db_removed) {
+            error_message = "failed to remove agent metadata";
+            return false;
+        }
+
+        if (remove_ret != 0) {
+            error_message = std::string("carrier remove returned error: ")
+                            + std::to_string(ela_get_error());
+            return false;
+        }
+        return true;
+    }
+
+    std::shared_ptr<std::vector<std::shared_ptr<std::string>>> CarrierRobot::getAgentUserIdList() {
+        return mDatabaseProxy->getAgentUserIdList();
+    }
+
+    std::shared_ptr<std::string> CarrierRobot::getAgentAddressByUserId(const std::string &user_id) {
+        return mDatabaseProxy->getAgentAddress(user_id);
+    }
+
+    bool CarrierRobot::isGroupCreator(const std::string &friend_id) {
+        return mCreaterFriendId.get() != nullptr
+               && mCreaterFriendId->compare(friend_id) == 0;
     }
 
     void CarrierRobot::helpCmd(const std::vector<std::string> &args, const std::string &message) {
@@ -708,6 +811,94 @@ namespace chatrobot {
             }
         }
 
+    }
+
+    void CarrierRobot::agentCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) {
+            return;
+        }
+        const std::string friend_id = args.back();
+
+        if (args.size() == 2) {
+            sendCommandResponse(friend_id,
+                                "Usage: /agent <address> | /agent add <address> | /agent del <userid> | /agent list");
+            return;
+        }
+
+        const std::string action_or_address = args[1];
+
+        if (action_or_address == "list"
+            || action_or_address == "ls") {
+            auto agent_user_ids = mDatabaseProxy->getAgentUserIdList();
+            if (agent_user_ids.get() == nullptr || agent_user_ids->empty()) {
+                sendCommandResponse(friend_id, "No agent registered for this group.");
+                return;
+            }
+
+            std::string result = "Agent list:\n";
+            for (int i = 0; i < agent_user_ids->size(); i++) {
+                const std::string user_id = *agent_user_ids->at(i).get();
+                std::shared_ptr<std::string> address = mDatabaseProxy->getAgentAddress(user_id);
+                result += user_id;
+                result += " ";
+                result += (address.get() != nullptr) ? *address.get() : "";
+                result += "\n";
+            }
+            sendCommandResponse(friend_id, result);
+            return;
+        }
+
+        if (action_or_address == "del"
+            || action_or_address == "remove"
+            || action_or_address == "rm") {
+            if (args.size() < 4) {
+                sendCommandResponse(friend_id, "Usage: /agent del <userid>");
+                return;
+            }
+            if (!isGroupCreator(friend_id)) {
+                sendCommandResponse(friend_id, "Only group creator can remove agent.");
+                return;
+            }
+
+            const std::string agent_user_id = args[2];
+            std::string remove_error;
+            if (!removeAgentByUserId(agent_user_id, remove_error)) {
+                sendCommandResponse(friend_id,
+                                    std::string("Failed to remove agent: ") + remove_error);
+                return;
+            }
+
+            sendCommandResponse(friend_id, std::string("Agent removed: ") + agent_user_id);
+            return;
+        }
+
+        std::string agent_address = action_or_address;
+        if (action_or_address == "add") {
+            if (args.size() < 4) {
+                sendCommandResponse(friend_id, "Usage: /agent add <address>");
+                return;
+            }
+            agent_address = args[2];
+        }
+
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can add agent.");
+            return;
+        }
+
+        std::string error_message;
+        if (!requestAgentFriend(agent_address, error_message)) {
+            sendCommandResponse(friend_id,
+                                std::string("Unable to add agent: ") + error_message);
+            return;
+        }
+
+        std::string agent_user_id;
+        GetCarrierUsrIdByAddress(agent_address, agent_user_id);
+        sendCommandResponse(friend_id,
+                            std::string("Agent registered: userid=") + agent_user_id
+                            + " address=" + agent_address
+                            + ". You only need this once unless agent is removed.");
     }
 
 }

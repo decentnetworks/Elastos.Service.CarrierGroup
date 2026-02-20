@@ -10,6 +10,7 @@
 #include <iostream>
 #include "carrierService.h"
 #include "../common/Log.hpp"
+#include "../common/CommonVar.h"
 using json = nlohmann::json;
 constexpr int MAX_QUEUE_SIZE = 10;
 
@@ -61,6 +62,7 @@ void carrierService::runCommunicationThread() {
     mCarrierRobot->registerCarrierCallBack(std::bind(&carrierService::sendMsgToWorkThread, this, std::placeholders::_1));
     mCarrierRobot->start(mRootDir.c_str(), mServiceId, msg_json["client_fd"]);
     mCarrierRobot->runCarrier();
+    mCommandThread = std::thread(&carrierService::runCommandThread, this, sockfd);
 
     while (true) {
         std::unique_lock <std::mutex> lk(mQueue_lock);
@@ -74,7 +76,41 @@ void carrierService::runCommunicationThread() {
         lk.unlock();
         mWrite_cond.notify_one();
     }
+    if (mCommandThread.joinable()) {
+        mCommandThread.join();
+    }
     close(sockfd);
+}
+
+void carrierService::runCommandThread(int sockfd) {
+    char buf[512] = {};
+    while (true) {
+        memset(buf, 0, sizeof(buf));
+        int res = read(sockfd, buf, sizeof(buf));
+        if (res <= 0) {
+            return;
+        }
+
+        try {
+            auto cmd_json = json::parse(buf);
+            int cmd = cmd_json["cmd"];
+            if (cmd == Command_AgentAdd) {
+                std::string address = cmd_json["address"];
+                std::string err;
+                if (!mCarrierRobot->addAgentByAddress(address, err)) {
+                    Log::I(Log::TAG, "runCommandThread add agent failed: %s", err.c_str());
+                }
+            } else if (cmd == Command_AgentRemove) {
+                std::string user_id = cmd_json["userid"];
+                std::string err;
+                if (!mCarrierRobot->removeAgentByUserId(user_id, err)) {
+                    Log::I(Log::TAG, "runCommandThread remove agent failed: %s", err.c_str());
+                }
+            }
+        } catch (std::exception &e) {
+            Log::I(Log::TAG, "runCommandThread parse command failed: %s", e.what());
+        }
+    }
 }
 
 void carrierService::start(std::string ip, int port, std::string data_root_dir, int service_id) {

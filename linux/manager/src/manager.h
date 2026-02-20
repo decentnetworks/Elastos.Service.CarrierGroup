@@ -10,6 +10,7 @@
 #include <thread>
 #include <future>
 #include <queue>
+#include <map>
 #include "GroupInfo.h"
 #include "DatabaseProxy.h"
 typedef std::lock_guard<std::mutex> MUTEX_LOCKER;
@@ -34,6 +35,8 @@ private:
     void _updateGroupMemberCount(std::string friendid, int member_count);
     void _bindService(int service_id, const std::string data_dir);
     void _recoveryGroupInfo();
+    void _registerServiceSocket(int service_id, int client_fd);
+    bool _sendCommandToService(int service_id, const std::string& message);
     std::vector<std::shared_ptr<std::thread>> mThreadList;
     std::thread mCommunicationThread;
     std::thread mWorkThread;
@@ -47,8 +50,14 @@ private:
     std::queue<std::shared_ptr<std::string>> mTmpQueue;
     std::queue<std::shared_ptr<std::string>> mQueue;
     std::mutex mQueue_lock;
+    std::mutex mServiceSocketMapLock;
+    std::map<int, int> mServiceSocketMap;
     std::condition_variable mQueue_cond;
     std::condition_variable mWrite_cond;
+
+public:
+    bool addAgent(int service_id, const std::string& address, std::string& err);
+    bool removeAgent(int service_id, const std::string& user_id, std::string& err);
 };
 
 

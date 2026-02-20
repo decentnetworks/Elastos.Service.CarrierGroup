@@ -68,6 +68,11 @@ namespace chatrobot {
         void blockFriendCmd(const std::vector<std::string> &args);
         void updateNickNameCmd(const std::vector<std::string> &args);
         void deleteGroupCmd(const std::vector<std::string> &args);
+        void agentCmd(const std::vector<std::string> &args);
+        bool addAgentByAddress(const std::string& address, std::string& error_message);
+        bool removeAgentByUserId(const std::string& user_id, std::string& error_message);
+        std::shared_ptr<std::vector<std::shared_ptr<std::string>>> getAgentUserIdList();
+        std::shared_ptr<std::string> getAgentAddressByUserId(const std::string& user_id);
         std::shared_ptr<std::string> getGroupNickName();
         int getGroupStatus();
         void registerCarrierCallBack(const std::function<void(const std::string)> &carrierCallBack);
@@ -75,6 +80,9 @@ namespace chatrobot {
         std::shared_ptr<std::string> resolveGroupDisplayName(int service_id);
         std::shared_ptr<std::string> resolveMemberDisplayName(const char *friendid, const char *display_name);
         int applySelfDisplayName(int service_id);
+        bool requestAgentFriend(const std::string &address, std::string &error_message);
+        void sendCommandResponse(const std::string &friend_id, const std::string &message);
+        bool isGroupCreator(const std::string& friend_id);
 
         static CarrierRobot* instance;
 

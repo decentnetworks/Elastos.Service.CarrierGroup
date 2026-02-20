@@ -17,10 +17,12 @@ public:
     void start(std::string ip, int port, std::string data_root_dir, int service_id);
     void runCarrier();
     void runCommunicationThread();
+    void runCommandThread(int sockfd);
     void sendMsgToWorkThread(const std::string msg);
 private:
     std::shared_ptr<chatrobot::CarrierRobot> mCarrierRobot;
     std::thread mCommunicationThread;
+    std::thread mCommandThread;
     std::string mRootDir;
     std::string mIp;
     int mPort;

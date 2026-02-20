@@ -59,20 +59,28 @@ namespace chatrobot {
 
         void addBlockMember(std::shared_ptr<MemberInfo> memberinfo);
         bool removeBlockMember(std::string friendid);
+        bool addAgent(const std::string& user_id, const std::string& address);
+        bool removeAgent(const std::string& user_id);
+        bool hasAgent(const std::string& user_id);
+        std::shared_ptr<std::string> getAgentAddress(const std::string& user_id);
+        std::shared_ptr<std::vector<std::shared_ptr<std::string>>> getAgentUserIdList();
     private:
         std::mutex _SyncedGroupInfo;
         std::mutex _SyncedMemberList;
         std::mutex _SyncedBlockMemberList;
         std::mutex _SyncedMessageList;
+        std::mutex _SyncedAgentList;
         std::shared_ptr<std::string> mNickName;
         sqlite3 *mDb;
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> mBlockMemberList;
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> mMemberList;
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> mRemovedMemberList;
         std::shared_ptr<std::vector<std::shared_ptr<MessageInfo>>> mMessageList;
+        std::shared_ptr<std::map<std::string, std::string>> mAgentMap;
         void syncBlockList();
         void syncMemberList();
         void syncGroupInfo();
+        void syncAgentList();
         static int callback(void *context, int argc, char **argv, char **azColName);
 
     };

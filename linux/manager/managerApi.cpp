@@ -26,6 +26,24 @@ void removeGroup(int service_id) {
     mManager.removeGroup(service_id);
     printf("api removeGroup out\n");
 }
+int addAgent(int service_id, char* address) {
+    std::string err;
+    bool ok = mManager.addAgent(service_id, address == nullptr ? "" : std::string(address), err);
+    if (!ok) {
+        printf("api addAgent failed: %s\n", err.c_str());
+        return -1;
+    }
+    return 0;
+}
+int removeAgent(int service_id, char* userid) {
+    std::string err;
+    bool ok = mManager.removeAgent(service_id, userid == nullptr ? "" : std::string(userid), err);
+    if (!ok) {
+        printf("api removeAgent failed: %s\n", err.c_str());
+        return -1;
+    }
+    return 0;
+}
 void list(char* outdata) {
     printf("api list in\n");
     std::shared_ptr<std::vector<std::shared_ptr<GroupInfo>>> group_list = mManager.getGroupList();

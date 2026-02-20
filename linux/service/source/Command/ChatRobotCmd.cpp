@@ -15,6 +15,7 @@ const std::vector<ChatRobotCmd::CommandInfo> ChatRobotCmd::gCommandInfoList{
         //{'i', "info",  ChatRobotCmd::PrintInfo, "Print friend's detail infommation"},
         {"l", "list",  ChatRobotCmd::ListFriends,     "List friends."},
         {"u", "update",  ChatRobotCmd::UpdateNickName,     "Update group name."},
+        {"g", "agent",  ChatRobotCmd::Agent,      "Manage agent. /agent add <address> | /agent del <userid> | /agent list"},
         {"e", "exit",  ChatRobotCmd::DeleteGroup,     "Delete group and exit."},
 
 };
@@ -138,6 +139,13 @@ int ChatRobotCmd::DeleteGroup(void *context, const std::vector<std::string> &arg
                               std::string &errMsg) {
     auto carrier_robot = reinterpret_cast< chatrobot::CarrierRobot *>(context);
     carrier_robot->deleteGroupCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Agent(void *context, const std::vector<std::string> &args,
+                        std::string &errMsg) {
+    auto carrier_robot = reinterpret_cast< chatrobot::CarrierRobot *>(context);
+    carrier_robot->agentCmd(args);
     return 0;
 }
 

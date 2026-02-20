@@ -115,6 +115,32 @@ void manager::_updateGroupAddress(int service_id, std::string address) {
 
 }
 
+void manager::_registerServiceSocket(int service_id, int client_fd) {
+    MUTEX_LOCKER lock(mServiceSocketMapLock);
+    mServiceSocketMap[service_id] = client_fd;
+}
+
+bool manager::_sendCommandToService(int service_id, const std::string &message) {
+    int client_fd = -1;
+    {
+        MUTEX_LOCKER lock(mServiceSocketMapLock);
+        auto it = mServiceSocketMap.find(service_id);
+        if (it == mServiceSocketMap.end()) {
+            return false;
+        }
+        client_fd = it->second;
+    }
+    if (client_fd < 0) {
+        return false;
+    }
+
+    ssize_t write_size = write(client_fd, message.c_str(), message.size());
+    if (write_size < 0 || static_cast<size_t>(write_size) != message.size()) {
+        return false;
+    }
+    return true;
+}
+
 void manager::_updateGroupMemberCount(std::string friendid, int member_count) {
     std::cout << std::to_string(member_count).c_str() << std::endl;
     mDataBaseProxy->updateGroupMemberCount(friendid, member_count);
@@ -199,6 +225,10 @@ void manager::runWorkThread() {
                 case Command_UpdateAddress: {
                     int serviceid = msg_json["serviceid"];
                     std::string address = msg_json["friendid"];
+                    if (msg_json.find("client_fd") != msg_json.end()) {
+                        int client_fd = msg_json["client_fd"];
+                        _registerServiceSocket(serviceid, client_fd);
+                    }
                     this->_updateGroupAddress(serviceid, address);
                     break;
                 }
@@ -249,11 +279,14 @@ void manager::recvServiceMsgThread(int client_fd) {
         if (res <= 0) {//包括0和-1
             return;
         }
-        write(client_fd, buf, strlen(buf));
         //发送消息到工作线程
-        char msg[512];
-        sprintf(msg, "%s", buf);
-        sendMsgToWorkThread(msg);
+        try {
+            auto recv_json = json::parse(buf);
+            recv_json["client_fd"] = client_fd;
+            sendMsgToWorkThread(recv_json.dump());
+        } catch (std::exception &e) {
+            std::cout << "[exception caught: " << e.what() << "]\n";
+        }
     }
 }
 void manager::runCommunicationThread() {
@@ -339,4 +372,28 @@ void manager::_bindService(int service_id, const std::string data_dir) {
             break;
 
     }
+}
+
+bool manager::addAgent(int service_id, const std::string &address, std::string &err) {
+    json cmd_msg;
+    cmd_msg["cmd"] = Command_AgentAdd;
+    cmd_msg["serviceid"] = service_id;
+    cmd_msg["address"] = address;
+    if (!_sendCommandToService(service_id, cmd_msg.dump())) {
+        err = "service socket not ready";
+        return false;
+    }
+    return true;
+}
+
+bool manager::removeAgent(int service_id, const std::string &user_id, std::string &err) {
+    json cmd_msg;
+    cmd_msg["cmd"] = Command_AgentRemove;
+    cmd_msg["serviceid"] = service_id;
+    cmd_msg["userid"] = user_id;
+    if (!_sendCommandToService(service_id, cmd_msg.dump())) {
+        err = "service socket not ready";
+        return false;
+    }
+    return true;
 }

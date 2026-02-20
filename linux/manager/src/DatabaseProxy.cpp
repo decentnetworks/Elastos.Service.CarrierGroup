@@ -247,11 +247,11 @@ void DatabaseProxy::syncGroupList() {
 
 bool DatabaseProxy::startDb(const char *data_dir) {
     std::string strConn = std::string(data_dir) + "/chatrobotmanager.db";
-    char *errMsg;
+    char *errMsg = NULL;
     //打开一个数据库，如果改数据库不存在，则创建一个名字为databaseName的数据库文件
     int rv;
     rv = sqlite3_config(SQLITE_CONFIG_MULTITHREAD);
-    if (rv != SQLITE_OK) {
+    if (rv != SQLITE_OK && rv != SQLITE_MISUSE) {
         printf( "sqlite3_config error: %d\n", rv);
         return 1;
     }

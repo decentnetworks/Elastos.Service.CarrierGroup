@@ -113,12 +113,59 @@ curl -sS http://127.0.0.1:5000/create
 
 - `GET /groups`: list groups (id/address/members/nickname)
 - `GET /create`: create one new group
+- `GET|POST /agent/add?group_id=<id>&address=<carrier-address>`: add/register agent on group side
+- `GET|POST /agent/remove?group_id=<id>&userid=<agent-userid>`: remove agent on group side
+- `GET /agent/list?group_id=<id>`: list registered agents for one group (`userid + address`)
+
+Example:
+
+```bash
+curl "http://127.0.0.1:5000/agent/add?group_id=1&address=E9kgtcGGAXyddTKwh1o44PZavkRfdYTZCikiHxnrWhhQgd4JREP6"
+curl "http://127.0.0.1:5000/agent/list?group_id=1"
+curl "http://127.0.0.1:5000/agent/remove?group_id=1&userid=6z2o8ojPVjFGRzcffUdd5btvDYAt4tLuwJ8j1jvMBU8p"
+```
+
+Important: quote URLs containing `&` so shell does not background the command.
+
+## Group Chat Commands
+
+- `/agent add <carrier-address>` or `/agent <carrier-address>`: creator-only, add/register an OpenClaw agent.
+- `/agent del <userid>`: creator-only, remove agent by userid.
+- `/agent list`: show registered agents (`userid + address`) for the group.
+- Agents are saved per-group in service DB table `agent_table`; re-add is skipped if userid is already registered.
 
 ## Nickname Notes
 
 - Group nicknames shown in `/groups` are stored in manager DB: `chatrobotmanager.db`.
 - Per-service Carrier display names are now set from service group nickname during startup.
 - If friend display name is empty from network data, fallback name is used to avoid blank entries.
+
+## Runtime DB Files
+
+- Manager DB: `<runtime_data>/chatrobotmanager.db`
+- Group DB: `<runtime_data>/carrierService<group_id>/chatrobot.db`
+- Agent rows are stored in each group DB table: `agent_table(UserId, Address)`
+
+Default runtime data directory in this repo:
+
+- `linux/ui/runtime_data`
+
+## Logs
+
+Run in foreground:
+
+```bash
+cd linux/ui/appserver
+./startCarrierByServer.sh 127.0.0.1 5000 /home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/runtime_data
+```
+
+Run with log file:
+
+```bash
+cd linux/ui/appserver
+./startCarrierByServer.sh 127.0.0.1 5000 /home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/runtime_data > appserver.log 2>&1
+tail -f appserver.log
+```
 
 ## Troubleshooting
 
@@ -135,4 +182,3 @@ sudo apt install -y libsqlite3-dev
 - Ensure appserver process is still running.
 - Start from `linux/ui/appserver` and keep that terminal open.
 - Check port conflict on `5000` and manager socket port (`socket_port` in config).
-

@@ -61,6 +61,9 @@ private:
     static int DeleteGroup(void* context,
                            const std::vector<std::string>& args,
                            std::string& errMsg);
+    static int Agent(void* context,
+                     const std::vector<std::string>& args,
+                     std::string& errMsg);
     static int PrintInfo(void* context,
                          const std::vector<std::string>& args,
                          std::string& errMsg);
@@ -81,4 +84,3 @@ private:
 /***********************************************/
 
 #endif /* _CONTACT_TEST_CMD_HPP_ */
-

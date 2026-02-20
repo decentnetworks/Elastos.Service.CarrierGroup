@@ -13,6 +13,7 @@ namespace chatrobot {
         mMemberList = std::make_shared<std::vector<std::shared_ptr<MemberInfo>>>();
         mBlockMemberList = std::make_shared<std::vector<std::shared_ptr<MemberInfo>>>();
         mRemovedMemberList = std::make_shared<std::vector<std::shared_ptr<MemberInfo>>>();
+        mAgentMap = std::make_shared<std::map<std::string, std::string>>();
     }
 
     DatabaseProxy::~DatabaseProxy() {
@@ -20,6 +21,7 @@ namespace chatrobot {
         mMessageList.reset();
         mBlockMemberList.reset();
         mRemovedMemberList.reset();
+        mAgentMap.reset();
     }
 
     void DatabaseProxy::updateMemberInfo(std::shared_ptr<std::string> friendid,
@@ -334,6 +336,64 @@ namespace chatrobot {
         Log::I(TAG, "removeBlockMember not exist, friendid:%s", friendid.c_str());
         return false;
     }
+
+    bool DatabaseProxy::addAgent(const std::string &user_id, const std::string &address) {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        if (user_id.empty() || address.empty()) {
+            return false;
+        }
+        std::string t_strSql = "";
+        char *errMsg = NULL;
+        t_strSql = "INSERT OR REPLACE INTO agent_table(UserId, Address) VALUES('"
+                   + user_id + "','" + address + "');";
+        int rv = sqlite3_exec(mDb, t_strSql.c_str(), callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite addAgent error: %s\n", errMsg);
+            return false;
+        }
+        (*mAgentMap.get())[user_id] = address;
+        return true;
+    }
+
+    bool DatabaseProxy::removeAgent(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        if (user_id.empty()) {
+            return false;
+        }
+        std::string t_strSql = "";
+        char *errMsg = NULL;
+        t_strSql = "delete from agent_table where UserId='" + user_id + "';";
+        int rv = sqlite3_exec(mDb, t_strSql.c_str(), callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite removeAgent error: %s\n", errMsg);
+            return false;
+        }
+        mAgentMap->erase(user_id);
+        return true;
+    }
+
+    bool DatabaseProxy::hasAgent(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        return mAgentMap->find(user_id) != mAgentMap->end();
+    }
+
+    std::shared_ptr<std::string> DatabaseProxy::getAgentAddress(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        auto it = mAgentMap->find(user_id);
+        if (it == mAgentMap->end()) {
+            return std::shared_ptr<std::string>(nullptr);
+        }
+        return std::make_shared<std::string>(it->second);
+    }
+
+    std::shared_ptr<std::vector<std::shared_ptr<std::string>>> DatabaseProxy::getAgentUserIdList() {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        auto result = std::make_shared<std::vector<std::shared_ptr<std::string>>>();
+        for (const auto &item : *mAgentMap.get()) {
+            result->push_back(std::make_shared<std::string>(item.first));
+        }
+        return result;
+    }
     int DatabaseProxy::callback(void *context, int argc, char **argv, char **azColName) {
         auto database_proxy = reinterpret_cast<DatabaseProxy *>(context);
         int i;
@@ -440,6 +500,47 @@ namespace chatrobot {
         sqlite3_free_table(azResult);
         sqlite3_finalize(pStmt);     //销毁一个SQL语句对象
     }
+
+    void DatabaseProxy::syncAgentList() {
+        MUTEX_LOCKER locker_sync_data(_SyncedAgentList);
+        mAgentMap->clear();
+        char **azResult;
+        char *errMsg = NULL;
+        int nrow;
+        int ncolumn;
+        std::string t_strSql;
+        t_strSql = "select * from agent_table order by id asc";
+        sqlite3_stmt *pStmt;
+        int rc = sqlite3_prepare_v2(
+                mDb,
+                t_strSql.c_str(),
+                strlen(t_strSql.c_str()),
+                &pStmt,
+                NULL
+        );
+        if (rc != SQLITE_OK) {
+            Log::I(TAG, "sqlite3_prepare_v2 error:%s", sqlite3_errmsg(mDb));
+            return;
+        }
+
+        rc = sqlite3_get_table(mDb, t_strSql.c_str(), &azResult, &nrow, &ncolumn, &errMsg);
+        if (rc != SQLITE_OK) {
+            Log::I(TAG, "syncAgentList, Can't get table: %s", sqlite3_errmsg(mDb));
+            sqlite3_finalize(pStmt);
+            return;
+        }
+
+        if (nrow != 0 && ncolumn != 0) {
+            for (int i = 1; i <= nrow; i++) {
+                std::string user_id = azResult[3 * i + 1];
+                std::string address = azResult[3 * i + 2];
+                (*mAgentMap.get())[user_id] = address;
+            }
+        }
+
+        sqlite3_free_table(azResult);
+        sqlite3_finalize(pStmt);
+    }
     void DatabaseProxy::syncMemberList() {
         MUTEX_LOCKER locker_sync_data(_SyncedMemberList);
         //查询一条记录
@@ -487,11 +588,11 @@ namespace chatrobot {
 
     bool DatabaseProxy::startDb(const char *data_dir) {
         std::string strConn = std::string(data_dir) + "/chatrobot.db";
-        char *errMsg;
+        char *errMsg = NULL;
         //打开一个数据库，如果改数据库不存在，则创建一个名字为databaseName的数据库文件
         int rv;
         rv = sqlite3_config(SQLITE_CONFIG_MULTITHREAD);
-        if (rv != SQLITE_OK) {
+        if (rv != SQLITE_OK && rv != SQLITE_MISUSE) {
             Log::I(DatabaseProxy::TAG, "sqlite3_config error: %d\n", rv);
             return 1;
         }
@@ -529,10 +630,18 @@ namespace chatrobot {
                    "SQLite group_info_table statement execution error: %s\n", errMsg);
             return 1;
         }
+        char create_agent_table[256] = "CREATE TABLE IF NOT EXISTS agent_table (id INTEGER PRIMARY KEY AUTOINCREMENT,UserId TEXT NOT NULL UNIQUE,Address TEXT NOT NULL)";
+        rv = sqlite3_exec(mDb, create_agent_table, callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG,
+                   "SQLite agent_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
         //同步Member信息
         syncMemberList();
         syncGroupInfo();
         syncBlockList();
+        syncAgentList();
         return 0;
     }
 }
