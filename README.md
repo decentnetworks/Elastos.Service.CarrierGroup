@@ -53,10 +53,11 @@ deactivate
 From repo root:
 
 ```bash
+export CARRIER_SDK_ROOT=/path/to/Elastos.NET.Carrier.Native.SDK
 cmake -S linux/manager -B build/manager
 cmake --build build/manager -j
 
-cmake -S linux/service -B build/service
+cmake -S linux/service -B build/service -DCARRIER_SDK_ROOT="$CARRIER_SDK_ROOT"
 cmake --build build/service -j
 ```
 
@@ -138,6 +139,12 @@ Important: quote URLs containing `&` so shell does not background the command.
 
 - Protocol/design doc for sender attribution and reply routing:
   - `docs/AGENT_GROUP_MESSAGE_PROTOCOL.md`
+- Agent-client transport/status model (DM/group attribution, typing/thinking/delivery):
+  - `docs/AGENT_CLIENT_COMMUNICATION_PROTOCOL.md`
+- Command-menu standards and cross-channel rollout plan:
+  - `docs/COMMAND_MENU_STANDARDS.md`
+- iOS/Android product requirements for `/` menu and typing indicator UX:
+  - `docs/MOBILE_MENU_TYPING_PRD.md`
 - Agent recipients get `CGP1 <json>` envelope including:
   - `chat_type=group`, `source=carrier_group_service` (explicit group classification)
   - `group.userid`, `group.address`, `group.nickname`
@@ -145,6 +152,7 @@ Important: quote URLs containing `&` so shell does not background the command.
   - `origin.user_info` + `origin.friend_info` (from Carrier `ElaFriendInfo` when available)
   - `message.text`, `message.timestamp`, `render.plain`
 - Inbound `CGR1` parsing accepts compatibility variants (`carriergroupreply`, `chattype`) and sanitizes stray control bytes before JSON parse fallback.
+- Status relay is supported with `CGS1 <json>` envelopes (group status), fanout to non-agent members, and no DB transcript persistence.
 
 ## Group Chat Commands
 

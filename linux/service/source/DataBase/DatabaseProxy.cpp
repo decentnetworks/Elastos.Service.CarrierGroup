@@ -179,19 +179,28 @@ namespace chatrobot {
     void DatabaseProxy::addMessgae(std::shared_ptr<std::string> friend_id,
                                    std::string message, std::time_t send_time) {
         MUTEX_LOCKER locker_sync_data(_SyncedMessageList);
-        char *errMsg = NULL;
-        std::string t_strSql;
-        t_strSql = "insert into message_table values(NULL,'"+*friend_id.get()+"'";
-        t_strSql += ",'"+message+"'";
-        t_strSql += ","+std::to_string(send_time)+"";
-        t_strSql += ");";
-
-                //消息直接入库
-        int rv = sqlite3_exec(mDb, t_strSql.c_str(), callback, this, &errMsg);
-        if (rv != SQLITE_OK) {
-            Log::I(DatabaseProxy::TAG, "SQLite addMessgae error: %s\n",
-                   errMsg);
+        if (friend_id.get() == nullptr) {
+            Log::I(DatabaseProxy::TAG, "SQLite addMessgae error: friend_id is null");
+            return;
         }
+
+        const char *sql = "insert into message_table values(NULL, ?, ?, ?);";
+        sqlite3_stmt *stmt = nullptr;
+        int rv = sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite addMessgae prepare error: %s\n", sqlite3_errmsg(mDb));
+            return;
+        }
+
+        sqlite3_bind_text(stmt, 1, friend_id->c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, message.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(send_time));
+
+        rv = sqlite3_step(stmt);
+        if (rv != SQLITE_DONE) {
+            Log::I(DatabaseProxy::TAG, "SQLite addMessgae step error: %s\n", sqlite3_errmsg(mDb));
+        }
+        sqlite3_finalize(stmt);
     }
     std::shared_ptr<std::vector<std::shared_ptr<MessageInfo>>>
     DatabaseProxy::getMessages(std::shared_ptr<std::string> friend_id, std::time_t send_time, int max_limit) {
@@ -574,10 +583,14 @@ namespace chatrobot {
 
         if (nrow != 0 && ncolumn != 0) {     //有查询结果,不包含表头所占行数
             for (int i = 1; i <= nrow; i++) {        // 第0行为数据表头
+                int status = 1;
+                if (azResult[5 * i + 3] != nullptr) {
+                    status = atoi(azResult[5 * i + 3]);
+                }
                 mMemberList->push_back(std::make_shared<MemberInfo>(
                         std::make_shared<std::string>(azResult[5*i + 1]),
                         std::make_shared<std::string>(azResult[5*i + 2]),
-                        1,//初始化时为offline
+                        status,
                         atol(azResult[5*i + 4])));
             }
         }

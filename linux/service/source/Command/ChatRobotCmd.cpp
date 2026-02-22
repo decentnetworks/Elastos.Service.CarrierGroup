@@ -55,7 +55,7 @@ int ChatRobotCmd::Do(void* context,
     const auto &cmd = args[0];
 
     for (const auto &cmdInfo : gCommandInfoList) {
-        if (cmd.compare(0, 1, cmdInfo.mCmd) != 0
+        if (cmd != cmdInfo.mCmd
             && cmd != cmdInfo.mLongCmd) {
             continue;
         }
@@ -84,13 +84,27 @@ int ChatRobotCmd::Do(void* context,
 int ChatRobotCmd::Help(void* context,
                        const std::vector<std::string> &args,
                        std::string &errMsg) {
-    std::cout << "Usage:" << std::endl;
-    std::string msg = "";
-
-    for (const auto &cmdInfo : gCommandInfoList) {
-        msg += ""+cmdInfo.mCmd + " | " + cmdInfo.mLongCmd + " : "+ cmdInfo.mUsage + "\n";
-    }
     auto carrier_robot = reinterpret_cast< chatrobot::CarrierRobot *>(context);
+    std::string msg = "";
+    std::string friend_id = "";
+    bool is_creator = false;
+    if (args.size() >= 2) {
+        friend_id = args.back();
+        is_creator = carrier_robot->isGroupCreator(friend_id);
+    }
+
+    msg += "h | help : Print help usages.\n";
+    msg += "a | address : Show group address.\n";
+    msg += "l | list : List friends.\n";
+    if (is_creator) {
+        msg += "b | block : Block a friend by index.\n";
+        msg += "d | del : Delete a friend  by index.\n";
+        msg += "u | update : Update group name.\n";
+        msg += "g | agent : Manage agent. /agent add <address> | /agent del <userid> | /agent list\n";
+    } else {
+        msg += "g | agent : /agent list\n";
+        msg += "Admin group commands are hidden in DM.\n";
+    }
     carrier_robot->helpCmd(args, msg);
     return 0;
 }
