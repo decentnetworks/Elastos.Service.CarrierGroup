@@ -145,12 +145,19 @@ Important: quote URLs containing `&` so shell does not background the command.
   - `docs/COMMAND_MENU_STANDARDS.md`
 - iOS/Android product requirements for `/` menu and typing indicator UX:
   - `docs/MOBILE_MENU_TYPING_PRD.md`
+- iOS/Android group-vs-DM classification guide (envelope-first + trusted cache fallback):
+  - `docs/MOBILE_GROUP_CLASSIFICATION_GUIDE.md`
 - Agent recipients get `CGP1 <json>` envelope including:
   - `chat_type=group`, `source=carrier_group_service` (explicit group classification)
   - `group.userid`, `group.address`, `group.nickname`
   - `origin.userid`/`origin.friendid`/`origin.nickname`
   - `origin.user_info` + `origin.friend_info` (from Carrier `ElaFriendInfo` when available)
   - `message.text`, `message.timestamp`, `render.plain`
+- Client detection note:
+  - never infer group by Carrier id prefix/length heuristics (for example `G...`)
+  - for group identity use `group.userid` + `group.address`
+  - for sender identity use `origin.userid`
+  - do not overload `friend_info` fields with group-id markers
 - Inbound `CGR1` parsing accepts compatibility variants (`carriergroupreply`, `chattype`) and sanitizes stray control bytes before JSON parse fallback.
 - Status relay is supported with `CGS1 <json>` envelopes (group status), fanout to non-agent members, and no DB transcript persistence.
 

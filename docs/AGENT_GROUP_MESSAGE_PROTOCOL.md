@@ -85,6 +85,34 @@ Treat an incoming Carrier friend message as **group-forwarded** only when all ch
 
 If any check fails, treat as normal DM/plain message.
 
+### Mobile client fallback classification (when message is not `CGP1`)
+
+Carrier IDs are base58-style IDs and are not guaranteed to have a stable prefix (for example, do not assume `G...` means group).
+
+Recommended order:
+
+1. If payload is valid `CGP1`/`CGR1`/`CGS1` with `chat_type=group`, classify as group.
+2. Else if payload is valid `BGS1` with `chat_type=direct`, classify as DM.
+3. Else if chat peer id is in local known-group identity set, classify as group.
+4. Else classify as DM.
+
+Known-group identity set should include both:
+
+- `group.userid` (group service friend userid)
+- `group.address` (group carrier address)
+
+The set is populated from trusted sources such as group list/create/join APIs and prior valid `CGP1/CGR1/CGS1` payloads.
+
+Do not classify by string heuristics such as length/prefix rules.
+
+### Field ownership (do not overload `friend_info`)
+
+- Group identity fields: `group.userid`, `group.address`
+- Group sender identity field: `origin.userid`
+- `origin.friend_info` and `origin.user_info` are sender profile/presence metadata only.
+
+Do not repurpose unused `friend_info` fields to carry group address or chat-type hints; clients should read group identity from `group.*` and sender identity from `origin.*`.
+
 Trust model:
 
 - Without a known/allowed group sender identity list, this classification is format-based only (can be forged by any DM sender).
