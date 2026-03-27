@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <iostream>
 #include<unistd.h>
 #include<sys/types.h>
@@ -24,6 +25,19 @@ manager::~manager() {
 
 using json = nlohmann::json;
 constexpr int MAX_QUEUE_SIZE = 10;
+
+namespace {
+void setCloseOnExec(int fd) {
+    if (fd < 0) {
+        return;
+    }
+    int flags = fcntl(fd, F_GETFD);
+    if (flags == -1) {
+        return;
+    }
+    fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+}
 
 void manager::start(std::string ip, int port, std::string data_root_dir) {
 
@@ -296,6 +310,7 @@ void manager::runCommunicationThread() {
         perror("socket");
         exit(-1);
     }
+    setCloseOnExec(sockfd);
 
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
@@ -333,6 +348,7 @@ void manager::runCommunicationThread() {
             perror("accept");
             continue;
         }
+        setCloseOnExec(client_fd);
         //save client fd, close client when client shut down
         //TODO
         mThreadList.push_back(std::make_shared<std::thread>(std::thread(&manager::recvServiceMsgThread , this, client_fd)));
