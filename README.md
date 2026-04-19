@@ -110,11 +110,69 @@ cd linux/ui/appserver
 ./startCarrierByServer.sh 127.0.0.1 5000 /home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/runtime_data
 ```
 
+This starts the Flask HTTP API and loads the native manager library. The native
+manager then restores existing groups from `<runtime_data>/chatrobotmanager.db`
+and starts one `carrierService` process per group. Do not split the runtime data
+path across shell lines; if the path is truncated, the manager will use the
+wrong database and no existing group bots will come online.
+
 Test API in another terminal:
 
 ```bash
 curl -sS http://127.0.0.1:5000/groups
 curl -sS http://127.0.0.1:5000/create
+```
+
+Check native group services:
+
+```bash
+ps -ef | grep '[C]arrierService'
+```
+
+## Run As A User Service
+
+Create `~/.config/systemd/user/carriergroup.service`:
+
+```ini
+[Unit]
+Description=CarrierGroup appserver and native group services
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/appserver
+ExecStart=/home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/appserver/startCarrierByServer.sh 127.0.0.1 5000 /home/<user>/devs/Elastos.Service.CarrierGroup/linux/ui/runtime_data
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now carriergroup.service
+systemctl --user status carriergroup.service --no-pager
+```
+
+If the service should start at boot without an interactive login, enable user
+linger once:
+
+```bash
+sudo loginctl enable-linger <user>
+loginctl show-user <user> -p Linger
+```
+
+Useful service commands:
+
+```bash
+systemctl --user restart carriergroup.service
+systemctl --user stop carriergroup.service
+journalctl --user -u carriergroup.service -f
 ```
 
 ## API
@@ -186,6 +244,14 @@ Default runtime data directory in this repo:
 
 ## Logs
 
+For the systemd user service:
+
+```bash
+journalctl --user -u carriergroup.service -f
+journalctl --user -u carriergroup.service -n 100 --no-pager
+journalctl --user -u carriergroup.service -b --no-pager
+```
+
 Run in foreground:
 
 ```bash
@@ -215,4 +281,13 @@ sudo apt install -y libsqlite3-dev
 
 - Ensure appserver process is still running.
 - Start from `linux/ui/appserver` and keep that terminal open.
+- If using systemd, check `systemctl --user status carriergroup.service --no-pager`
+  and `journalctl --user -u carriergroup.service -n 100 --no-pager`.
 - Check port conflict on `5000` and manager socket port (`socket_port` in config).
+
+### Existing groups do not appear online
+
+- Confirm the service is using the same runtime data directory that contains
+  `chatrobotmanager.db` and `carrierService<group_id>/chatrobot.db`.
+- Confirm `curl -sS http://127.0.0.1:5000/groups` lists the expected groups.
+- Confirm native children are running with `ps -ef | grep '[C]arrierService'`.
