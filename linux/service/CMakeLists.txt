@@ -25,7 +25,6 @@ set(SOURCE_FILES main.cpp carrierService.cpp carrierService.h
         source/ErrCode.h
         source/Node.cpp
         source/Node.h)
-set(CARRIER_LIB_INCLUDE lib/include/)
 set(CARRIER_SDK_ROOT "$ENV{CARRIER_SDK_ROOT}" CACHE PATH "Path to Elastos.NET.Carrier.Native.SDK")
 if(NOT CARRIER_SDK_ROOT)
     set(CARRIER_SDK_ROOT "${PROJECT_SOURCE_DIR}/../../Elastos.NET.Carrier.Native.SDK")
@@ -35,7 +34,6 @@ if(NOT EXISTS "${CARRIER_SDK_ROOT}/src/carrier/carrier.h")
     message(FATAL_ERROR "CARRIER_SDK_ROOT is invalid: ${CARRIER_SDK_ROOT}. Set -DCARRIER_SDK_ROOT=/path/to/Elastos.NET.Carrier.Native.SDK")
 endif()
 
-INCLUDE_DIRECTORIES(${CARRIER_LIB_INCLUDE})
 INCLUDE_DIRECTORIES("${CARRIER_SDK_ROOT}/src/carrier")
 INCLUDE_DIRECTORIES("${CARRIER_SDK_ROOT}/src/session")
 INCLUDE_DIRECTORIES("${CARRIER_SDK_ROOT}/src/filetransfer")

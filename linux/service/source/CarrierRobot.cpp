@@ -11,8 +11,10 @@
 
 using namespace std;
 
-#include <ela_carrier.h>
-#include <ela_session.h>
+#include "CarrierCompat.h"
+#include "CarrierCompat.h"
+#include <carrier_session.h>
+#include <carrier_session_deprecated.h>
 #include <thread>
 #include <chrono>
 #include <Log.hpp>
@@ -130,6 +132,29 @@ namespace chatrobot {
             user["email"] = user_info.email;
             user["region"] = user_info.region;
             return user;
+        }
+
+        // AgentNet proto v2: what the sender's client advertised and the profile
+        // it published. Members only see each other through this envelope, so
+        // without it a group is a profile black hole. Empty for legacy peers.
+        json buildAgentNetJson(ElaCarrier *ela, const char *userid) {
+            Carrier *carrier = reinterpret_cast<Carrier *>(ela);
+            json agentnet;
+            CarrierClientInfo client;
+            CarrierProfileExt ext;
+            if (carrier && userid && carrier_get_friend_client_info(carrier, userid, &client) == 0) {
+                agentnet["proto_version"] = client.proto_version;
+                agentnet["platform"] = client.platform;
+                agentnet["os_version"] = client.os_version;
+                agentnet["app_version"] = client.app_version;
+            }
+            if (carrier && userid && carrier_get_friend_profile_ext(carrier, userid, &ext) == 0) {
+                agentnet["avatar_url"] = ext.avatar_url;
+                agentnet["url"] = ext.url;
+                agentnet["ens"] = ext.ens;
+                agentnet["extra"] = ext.extra;
+            }
+            return agentnet;
         }
 
         json buildFriendInfoJson(const ElaFriendInfo &friend_info) {
@@ -396,7 +421,7 @@ namespace chatrobot {
                             memberInfo->mMsgTimeStamp = message->mSendTimeStamp;
                             continue;
                         }
-                        int msg_ret = ela_send_friend_message(mCarrier.get(),
+                        int msg_ret = ela_send_friend_message_noreceipt(mCarrier.get(),
                                                               memberInfo->mFriendid.get()->c_str(),
                                                               msg.c_str(), msg.size());
                         if (msg_ret != 0) {
@@ -688,7 +713,7 @@ namespace chatrobot {
     }
 
     void CarrierRobot::sendCommandResponse(const std::string &friend_id, const std::string &message) {
-        int ela_ret = ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+        int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                               message.c_str(), strlen(message.c_str()));
         if (ela_ret != 0) {
             Log::I(Log::TAG,
@@ -992,7 +1017,7 @@ namespace chatrobot {
                 continue;
             }
 
-            int ela_ret = ela_send_friend_message(mCarrier.get(),
+            int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(),
                                                   member_friend_id.c_str(),
                                                   status_message.c_str(),
                                                   strlen(status_message.c_str()));
@@ -1059,6 +1084,7 @@ namespace chatrobot {
         if (has_sender_friend_info) {
             envelope["origin"]["user_info"] = buildUserInfoJson(sender_friend_info.user_info);
             envelope["origin"]["friend_info"] = buildFriendInfoJson(sender_friend_info);
+            envelope["origin"]["agentnet"] = buildAgentNetJson(mCarrier.get(), sender_user_id.c_str());
         } else {
             envelope["origin"]["user_info"]["userid"] = sender_user_id;
             envelope["origin"]["user_info"]["name"] = sender_nickname;
@@ -1096,7 +1122,7 @@ namespace chatrobot {
     void CarrierRobot::helpCmd(const std::vector<std::string> &args, const std::string &message) {
         if (args.size() >= 2) {
             const std::string friend_id = args[1];
-            int ela_ret = ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+            int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                                   message.c_str(), strlen(message.c_str()));
             if (ela_ret != 0) {
                 Log::I(Log::TAG,
@@ -1125,7 +1151,7 @@ namespace chatrobot {
                 memberInfo->UnLock();//同名还没处理
             }
 
-            int ela_ret = ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+            int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                                   ret_msg_str.c_str(),
                                                   strlen(ret_msg_str.c_str()));
             if (ela_ret != 0) {
@@ -1222,7 +1248,7 @@ namespace chatrobot {
                 } else {
                     sprintf(msg_str, "num %s member not exist!", del_userindex.c_str());
                 }
-                ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+                ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                         msg_str, strlen(msg_str));
                 json msg;
                 msg["cmd"] = Command_UpdateMemberCount;
@@ -1259,7 +1285,7 @@ namespace chatrobot {
                     sprintf(msg_str, "num %s member not exist!", del_userindex.c_str());
                 }
 
-                ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+                ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                         msg_str, strlen(msg_str));
 
                 json msg;
@@ -1286,7 +1312,7 @@ namespace chatrobot {
             this->getAddress(address);
 
             const std::string friend_id = args[1];
-            int ela_ret = ela_send_friend_message(mCarrier.get(), friend_id.c_str(),
+            int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                                   address.c_str(), strlen(address.c_str()));
             if (ela_ret != 0) {
                 Log::I(Log::TAG,

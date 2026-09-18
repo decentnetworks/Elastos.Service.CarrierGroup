@@ -16,8 +16,10 @@
 #include <ctime>
 #include <thread>
 #include <regex>
-#include <ela_session.h>
-#include <ela_carrier.h>
+#include "CarrierCompat.h"
+#include <carrier_session.h>
+#include <carrier_session_deprecated.h>
+#include "CarrierCompat.h"
 #include "DataBase/DatabaseProxy.h"
 #include <CarrierConfig.h>
 

@@ -8,7 +8,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <ela_carrier.h>
+#include "CarrierCompat.h"
 #include "CarrierConfig.h"
 
 namespace chatrobot {
