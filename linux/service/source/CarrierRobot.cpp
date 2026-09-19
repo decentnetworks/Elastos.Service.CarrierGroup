@@ -457,10 +457,15 @@ namespace chatrobot {
                                               void *context) {
         Log::I(Log::TAG, "OnCarrierFriendMessage from: %s len=%d", from, len);
         auto carrier_robot = reinterpret_cast<CarrierRobot *>(context);
-        const char *data = (const char *) (msg);
+        // Carrier payloads are not NUL-terminated; bound the copy by len and drop
+        // any trailing NULs a client counted in len.
+        auto data = std::make_shared<std::string>((const char *) msg, len);
+        while (!data->empty() && data->back() == '\0') {
+            data->pop_back();
+        }
         std::time_t send_time = carrier_robot->getTimeStamp();
         carrier_robot->addMessgae(std::make_shared<std::string>(from),
-                                  std::make_shared<std::string>(data),
+                                  data,
                                   send_time);
     }
 
