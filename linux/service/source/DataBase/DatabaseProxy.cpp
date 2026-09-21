@@ -15,6 +15,7 @@ namespace chatrobot {
         mBlockMemberList = std::make_shared<std::vector<std::shared_ptr<MemberInfo>>>();
         mRemovedMemberList = std::make_shared<std::vector<std::shared_ptr<MemberInfo>>>();
         mAgentMap = std::make_shared<std::map<std::string, std::string>>();
+        mSignerList = std::make_shared<std::vector<std::string>>();
     }
 
     DatabaseProxy::~DatabaseProxy() {
@@ -23,6 +24,7 @@ namespace chatrobot {
         mBlockMemberList.reset();
         mRemovedMemberList.reset();
         mAgentMap.reset();
+        mSignerList.reset();
     }
 
     void DatabaseProxy::updateMemberInfo(std::shared_ptr<std::string> friendid,
