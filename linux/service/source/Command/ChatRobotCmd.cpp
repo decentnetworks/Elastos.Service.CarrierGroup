@@ -16,6 +16,7 @@ const std::vector<ChatRobotCmd::CommandInfo> ChatRobotCmd::gCommandInfoList{
         {"l", "list",  ChatRobotCmd::ListFriends,     "List friends."},
         {"u", "update",  ChatRobotCmd::UpdateNickName,     "Update group name."},
         {"g", "agent",  ChatRobotCmd::Agent,      "Manage agent. /agent add <address> | /agent del <userid> | /agent list"},
+        {"s", "signer",  ChatRobotCmd::Signer,    "Manage beagles.eth signers. /signer add <userid> | /signer del <userid> | /signer list"},
         {"e", "exit",  ChatRobotCmd::DeleteGroup,     "Delete group and exit."},
 
 };
@@ -101,8 +102,10 @@ int ChatRobotCmd::Help(void* context,
         msg += "d | del : Delete a friend  by index.\n";
         msg += "u | update : Update group name.\n";
         msg += "g | agent : Manage agent. /agent add <address> | /agent del <userid> | /agent list\n";
+        msg += "s | signer : Manage beagles.eth signers. /signer add <userid> | /signer del <userid> | /signer list\n";
     } else {
         msg += "g | agent : /agent list\n";
+        msg += "s | signer : /signer list\n";
         msg += "Admin group commands are hidden in DM.\n";
     }
     carrier_robot->helpCmd(args, msg);
@@ -160,6 +163,13 @@ int ChatRobotCmd::Agent(void *context, const std::vector<std::string> &args,
                         std::string &errMsg) {
     auto carrier_robot = reinterpret_cast< chatrobot::CarrierRobot *>(context);
     carrier_robot->agentCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Signer(void *context, const std::vector<std::string> &args,
+                         std::string &errMsg) {
+    auto carrier_robot = reinterpret_cast< chatrobot::CarrierRobot *>(context);
+    carrier_robot->signerCmd(args);
     return 0;
 }
 

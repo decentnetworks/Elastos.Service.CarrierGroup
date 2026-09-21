@@ -1414,4 +1414,129 @@ namespace chatrobot {
                             + ". You only need this once unless agent is removed.");
     }
 
+    // The signer list is the payload the group key signs for the group's
+    // beagles.eth record. Sorted by byte order and comma-joined, so the same
+    // set always produces the same bytes regardless of insertion order.
+    std::string CarrierRobot::buildSignerProofPayload(std::time_t timestamp) {
+        auto signers = mDatabaseProxy->getSignerUserIdList();
+        std::vector<std::string> ids;
+        if (signers.get() != nullptr) {
+            for (int i = 0; i < signers->size(); i++) {
+                ids.push_back(*signers->at(i).get());
+            }
+        }
+        std::sort(ids.begin(), ids.end());
+
+        std::string joined;
+        for (size_t i = 0; i < ids.size(); i++) {
+            if (i > 0) {
+                joined += ",";
+            }
+            joined += ids[i];
+        }
+
+        std::string group_user_id;
+        getUserId(group_user_id);
+
+        return std::string("beagle-group-signers\n") + group_user_id + "\n" + joined + "\n"
+               + std::to_string(static_cast<long long>(timestamp));
+    }
+
+    std::string CarrierRobot::describeSigners() {
+        auto signers = mDatabaseProxy->getSignerUserIdList();
+        if (signers.get() == nullptr || signers->empty()) {
+            return "No signer registered for this group.";
+        }
+        std::string result = "Signer list:\n";
+        for (int i = 0; i < signers->size(); i++) {
+            result += *signers->at(i).get();
+            result += "\n";
+        }
+        return result;
+    }
+
+    void CarrierRobot::signerCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) {
+            return;
+        }
+        const std::string friend_id = args.back();
+
+        if (args.size() == 2) {
+            sendCommandResponse(friend_id,
+                                "Usage: /signer add <userid> | /signer del <userid> | /signer list");
+            return;
+        }
+
+        const std::string action = args[1];
+
+        if (action == "list" || action == "ls") {
+            sendCommandResponse(friend_id, describeSigners());
+            return;
+        }
+
+        if (action != "add" && action != "del" && action != "remove" && action != "rm") {
+            sendCommandResponse(friend_id,
+                                "Usage: /signer add <userid> | /signer del <userid> | /signer list");
+            return;
+        }
+
+        if (args.size() < 4) {
+            sendCommandResponse(friend_id,
+                                std::string("Usage: /signer ") + action + " <userid>");
+            return;
+        }
+
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can change signers.");
+            return;
+        }
+
+        // A signer is a Carrier userid (base58 public key), never an address:
+        // an address carries four extra bytes and would never match a signer
+        // the gateway sees.
+        const std::string signer_user_id = args[2];
+        static const std::string kBase58 =
+                "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        bool valid = signer_user_id.size() >= 43 && signer_user_id.size() <= 45;
+        for (size_t i = 0; valid && i < signer_user_id.size(); i++) {
+            if (kBase58.find(signer_user_id[i]) == std::string::npos) {
+                valid = false;
+            }
+        }
+        if (!valid) {
+            sendCommandResponse(friend_id,
+                                std::string("Not a Carrier userid: ") + signer_user_id
+                                + ". Expected 43-45 base58 chars, not a 52-char address.");
+            return;
+        }
+
+        if (action == "add") {
+            if (!mDatabaseProxy->addSigner(signer_user_id)) {
+                sendCommandResponse(friend_id, "Failed to add signer.");
+                return;
+            }
+        } else {
+            if (!mDatabaseProxy->hasSigner(signer_user_id)) {
+                sendCommandResponse(friend_id,
+                                    std::string("Not a signer: ") + signer_user_id);
+                return;
+            }
+            if (!mDatabaseProxy->removeSigner(signer_user_id)) {
+                sendCommandResponse(friend_id, "Failed to remove signer.");
+                return;
+            }
+        }
+
+        // TODO(signing): sign this payload with the group's own Carrier key
+        // (XEdDSA) and store signers + signersProof "<sigHex>.<ts>" for the
+        // group's beagles.eth record. The key is not reachable from the SDK
+        // yet, so the payload is reported unsigned and nothing is published.
+        const std::time_t now = std::time(nullptr);
+        const std::string payload = buildSignerProofPayload(now);
+        sendCommandResponse(friend_id,
+                            std::string(action == "add" ? "Signer added: " : "Signer removed: ")
+                            + signer_user_id + "\n\n" + describeSigners()
+                            + "\nProof payload (UNSIGNED, not published):\n" + payload);
+    }
+
 }

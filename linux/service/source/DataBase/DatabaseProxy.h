@@ -64,6 +64,10 @@ namespace chatrobot {
         bool hasAgent(const std::string& user_id);
         std::shared_ptr<std::string> getAgentAddress(const std::string& user_id);
         std::shared_ptr<std::vector<std::shared_ptr<std::string>>> getAgentUserIdList();
+        bool addSigner(const std::string& user_id);
+        bool removeSigner(const std::string& user_id);
+        bool hasSigner(const std::string& user_id);
+        std::shared_ptr<std::vector<std::shared_ptr<std::string>>> getSignerUserIdList();
     private:
         std::mutex _SyncedGroupInfo;
         std::mutex _SyncedMemberList;
@@ -77,10 +81,13 @@ namespace chatrobot {
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> mRemovedMemberList;
         std::shared_ptr<std::vector<std::shared_ptr<MessageInfo>>> mMessageList;
         std::shared_ptr<std::map<std::string, std::string>> mAgentMap;
+        std::mutex _SyncedSignerList;
+        std::shared_ptr<std::vector<std::string>> mSignerList;
         void syncBlockList();
         void syncMemberList();
         void syncGroupInfo();
         void syncAgentList();
+        void syncSignerList();
         static int callback(void *context, int argc, char **argv, char **azColName);
 
     };

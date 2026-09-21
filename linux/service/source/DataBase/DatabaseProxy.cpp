@@ -3,6 +3,7 @@
 //
 
 #include "DatabaseProxy.h"
+#include <algorithm>
 #include <map>
 #include <iostream>
 #include <../../common/Log.hpp>
@@ -403,6 +404,72 @@ namespace chatrobot {
         }
         return result;
     }
+    // Signers may edit this group's beagles.eth record. The list is what the
+    // group key signs, so it is stored with bound parameters: a userid with a
+    // quote in it would otherwise rewrite the statement.
+    bool DatabaseProxy::addSigner(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        if (user_id.empty()) {
+            return false;
+        }
+        if (std::find(mSignerList->begin(), mSignerList->end(), user_id) != mSignerList->end()) {
+            return true;
+        }
+        const char *sql = "INSERT OR IGNORE INTO signer_table(UserId, AddedAt) VALUES(?,?);";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite addSigner prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, user_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(std::time(nullptr)));
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rv != SQLITE_DONE) {
+            Log::I(DatabaseProxy::TAG, "SQLite addSigner error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        mSignerList->push_back(user_id);
+        return true;
+    }
+
+    bool DatabaseProxy::removeSigner(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        if (user_id.empty()) {
+            return false;
+        }
+        const char *sql = "DELETE FROM signer_table WHERE UserId=?;";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite removeSigner prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, user_id.c_str(), -1, SQLITE_TRANSIENT);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rv != SQLITE_DONE) {
+            Log::I(DatabaseProxy::TAG, "SQLite removeSigner error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        mSignerList->erase(std::remove(mSignerList->begin(), mSignerList->end(), user_id),
+                           mSignerList->end());
+        return true;
+    }
+
+    bool DatabaseProxy::hasSigner(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        return std::find(mSignerList->begin(), mSignerList->end(), user_id) != mSignerList->end();
+    }
+
+    std::shared_ptr<std::vector<std::shared_ptr<std::string>>> DatabaseProxy::getSignerUserIdList() {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        auto result = std::make_shared<std::vector<std::shared_ptr<std::string>>>();
+        for (const auto &user_id : *mSignerList.get()) {
+            result->push_back(std::make_shared<std::string>(user_id));
+        }
+        return result;
+    }
+
     int DatabaseProxy::callback(void *context, int argc, char **argv, char **azColName) {
         auto database_proxy = reinterpret_cast<DatabaseProxy *>(context);
         int i;
@@ -550,6 +617,24 @@ namespace chatrobot {
         sqlite3_free_table(azResult);
         sqlite3_finalize(pStmt);
     }
+    void DatabaseProxy::syncSignerList() {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        mSignerList->clear();
+        const char *sql = "select UserId from signer_table order by id asc";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(TAG, "syncSignerList prepare error: %s", sqlite3_errmsg(mDb));
+            return;
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *user_id = sqlite3_column_text(stmt, 0);
+            if (user_id != nullptr) {
+                mSignerList->push_back(std::string(reinterpret_cast<const char *>(user_id)));
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
     void DatabaseProxy::syncMemberList() {
         MUTEX_LOCKER locker_sync_data(_SyncedMemberList);
         //查询一条记录
@@ -650,11 +735,19 @@ namespace chatrobot {
                    "SQLite agent_table statement execution error: %s\n", errMsg);
             return 1;
         }
+        char create_signer_table[256] = "CREATE TABLE IF NOT EXISTS signer_table (id INTEGER PRIMARY KEY AUTOINCREMENT,UserId TEXT NOT NULL UNIQUE,AddedAt INTEGER)";
+        rv = sqlite3_exec(mDb, create_signer_table, callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG,
+                   "SQLite signer_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
         //同步Member信息
         syncMemberList();
         syncGroupInfo();
         syncBlockList();
         syncAgentList();
+        syncSignerList();
         return 0;
     }
 }
