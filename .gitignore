@@ -88,3 +88,15 @@ bsdiff-tmp
 linux/ui/runtime_data/
 linux/ui/venv_chatrobot/
 linux/ui/appserver/nohup.out
+linux/ui/appserver/appserver.log
+
+# Build outputs and machine-local config live in the appserver dir because the
+# manager execs ./carrierService from there. They were tracked once, which meant
+# a checkout could swap or delete the binary a live service was about to exec.
+# Copy chatrobot_config.example.ini to chatrobot_config.ini per machine.
+linux/ui/appserver/carrierService
+linux/ui/appserver/carrierService.*
+linux/ui/appserver/libcarrierManager.so
+linux/ui/appserver/chatrobot_config.ini
+linux/ui/appserver/server.py.bak-*
+linux/ui/appserver/startCarrierByServer.sh.bak-*
