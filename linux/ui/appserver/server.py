@@ -4,6 +4,7 @@
 from flask import Flask, abort, request, jsonify,make_response
 from flask_cors import CORS
 import argparse
+import json
 from pathlib import Path
 import sqlite3
 import chatrobot_restful_api as chatrobot
@@ -49,6 +50,105 @@ def _read_agent_table(group_id):
         return data, ""
     finally:
         conn.close()
+
+def _read_member_table(group_id):
+    db_path = Path(RUNTIME_DATA_DIR) / ("carrierService" + str(group_id)) / "chatrobot.db"
+    if not db_path.exists():
+        return None, "group db not found"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("select Friendid, NickName, Status, MsgTimeStamp from member_table order by id asc")
+        rows = cur.fetchall()
+        return [{
+            "userid": row[0],
+            "nickname": row[1],
+            "status": row[2],
+            "last_message_timestamp": row[3]
+        } for row in rows], ""
+    finally:
+        conn.close()
+
+def _read_signer_table(group_id):
+    db_path = Path(RUNTIME_DATA_DIR) / ("carrierService" + str(group_id)) / "chatrobot.db"
+    if not db_path.exists():
+        return None, "group db not found"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("select UserId from signer_table order by id asc")
+        return [row[0] for row in cur.fetchall()], ""
+    except sqlite3.OperationalError as err:
+        # Older group DBs predate signer_table; that is "no signers", not an error.
+        return [], str(err)
+    finally:
+        conn.close()
+
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+def _userid_from_address(address):
+    """A Carrier address is the 32-byte public key plus nospam and checksum;
+    the userid is that key re-encoded. Derived here so the endpoint can report
+    the group userid that has to sign the proof."""
+    n = 0
+    for ch in address:
+        idx = _B58.find(ch)
+        if idx < 0:
+            return ""
+        n = n * 58 + idx
+    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    raw = b"\0" * (38 - len(raw)) + raw if len(raw) < 38 else raw
+    key = raw[:32]
+    m = int.from_bytes(key, "big")
+    out = ""
+    while m:
+        m, rem = divmod(m, 58)
+        out = _B58[rem] + out
+    return "1" * (len(key) - len(key.lstrip(b"\0"))) + out
+
+def _group_userid(group_id):
+    try:
+        for group in json.loads(chatrobot.list()):
+            if str(group.get("id")) == str(group_id):
+                return _userid_from_address(group.get("address", ""))
+    except Exception:
+        return ""
+    return ""
+
+@app.route('/member/list', methods=['GET'])
+def list_members():
+    group_id = request.args.get('group_id')
+    if not group_id:
+        return jsonify({'code':1, 'error':'missing group_id'}), 400
+    data, err = _read_member_table(group_id)
+    if data is None:
+        return jsonify({'code':2, 'error':err}), 404
+    return jsonify({'code':0, 'group_id':str(group_id), 'count':len(data), 'data':data})
+
+@app.route('/group/signers', methods=['GET'])
+def group_signers():
+    """What a member's client needs to publish this group's beagles.eth record.
+
+    signersProof is null until the service can sign with the group's own
+    Carrier key; the gateway rejects a record without it, so nothing should be
+    published on the strength of this response alone."""
+    group_id = request.args.get('group_id')
+    if not group_id:
+        return jsonify({'code':1, 'error':'missing group_id'}), 400
+    signers, err = _read_signer_table(group_id)
+    if signers is None:
+        return jsonify({'code':2, 'error':err}), 404
+    # Sorted, de-duplicated and comma-joined: the exact string that is signed,
+    # and the only form the gateway accepts.
+    joined = ",".join(sorted(set(signers)))
+    return jsonify({
+        'code': 0,
+        'group_id': str(group_id),
+        'groupUserid': _group_userid(group_id),
+        'signers': joined,
+        'signersProof': None,
+        'note': 'unsigned: the group service cannot sign yet',
+    })
 
 @app.route('/agent/list', methods=['GET'])
 def list_agents():

@@ -1470,7 +1470,11 @@ namespace chatrobot {
         const std::string action = args[1];
 
         if (action == "list" || action == "ls") {
-            sendCommandResponse(friend_id, describeSigners());
+            const std::time_t now = std::time(nullptr);
+            sendCommandResponse(friend_id,
+                                describeSigners()
+                                + "\nProof payload (UNSIGNED, not published):\n"
+                                + buildSignerProofPayload(now));
             return;
         }
 
