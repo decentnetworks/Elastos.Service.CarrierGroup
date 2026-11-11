@@ -10,6 +10,8 @@
 #include <string>
 #include <iostream>
 #include <thread>
+#include <mutex>
+#include <json.hpp>
 #include <future>
 #include <queue>
 #include <memory> // std::unique_ptr
@@ -79,6 +81,8 @@ namespace chatrobot {
         void deleteGroupCmd(const std::vector<std::string> &args);
         void agentCmd(const std::vector<std::string> &args);
         void signerCmd(const std::vector<std::string> &args);
+        void ensCmd(const std::vector<std::string> &args);
+        void profileCmd(const std::vector<std::string> &args);
         bool isGroupCreator(const std::string& friend_id);
         bool addAgentByAddress(const std::string& address, std::string& error_message);
         bool removeAgentByUserId(const std::string& user_id, std::string& error_message);
@@ -95,6 +99,13 @@ namespace chatrobot {
         std::string buildSignerProofPayload(std::time_t timestamp);
         std::string joinedSigners();
         bool signSignerList(std::string &proof, std::string &error);
+        // Group-key signing, only ever over bytes built in this file (signer list,
+        // the group's own beagles.eth record). No caller passes outside bytes.
+        bool signWithGroupKey(const std::string &bytes, std::string &sig_hex, std::string &error);
+        bool ensFetch(const std::string &full_name, nlohmann::json &record, bool &found, std::string &error);
+        bool ensPublish(const nlohmann::json &record, std::string &error);
+        void ensRun(const std::string &friend_id, const std::string &action, const std::string &arg);
+        std::mutex mEnsMutex;
         bool ensureSignerProof(std::string &proof, std::string &error);
         std::string describeSigners();
         void sendCommandResponse(const std::string &friend_id, const std::string &message);

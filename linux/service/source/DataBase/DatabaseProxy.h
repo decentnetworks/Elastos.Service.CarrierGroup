@@ -81,6 +81,9 @@ namespace chatrobot {
         // `proof` is "<sigHex>.<ts>".
         bool setSignerProof(const std::string& signers, const std::string& proof, std::time_t signed_at);
         bool getSignerProof(std::string& signers, std::string& proof);
+        // Small text state (service_text): e.g. "ens.name" = this group's beagles.eth name.
+        bool setMetaText(const std::string& key, const std::string& value);
+        std::string getMetaText(const std::string& key);
     private:
         std::mutex _SyncedGroupInfo;
         std::mutex _SyncedMemberList;

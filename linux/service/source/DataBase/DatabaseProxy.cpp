@@ -163,20 +163,19 @@ namespace chatrobot {
 
     void DatabaseProxy::updateGroupNickName(std::shared_ptr<std::string> nick_name) {
         MUTEX_LOCKER locker_sync_data(_SyncedGroupInfo);
-        std::string t_strSql = "";
-        char *errMsg = NULL;
-        if (mNickName.get() == nullptr) {
-            t_strSql = "insert into group_info_table values(NULL,'"+*nick_name.get()+"');";
-        } else {
-            t_strSql = "update group_info_table set NickName='"+*nick_name.get()+"' where id=1;";
+        const char *sql = mNickName.get() == nullptr
+                          ? "insert into group_info_table values(NULL, ?);"
+                          : "update group_info_table set NickName=? where id=1;";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(TAG, "SQLite updateGroupNickName prepare error: %s\n", sqlite3_errmsg(mDb));
+            return;
         }
-
-        //消息直接入库
-        int rv = sqlite3_exec(mDb, t_strSql.c_str(), callback, this, &errMsg);
-        if (rv != SQLITE_OK) {
-            Log::I(TAG, "SQLite update updateGroupNickName error: %s\n",
-                   errMsg);
+        sqlite3_bind_text(stmt, 1, nick_name->c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            Log::I(TAG, "SQLite update updateGroupNickName error: %s\n", sqlite3_errmsg(mDb));
         }
+        sqlite3_finalize(stmt);
         mNickName = nick_name;
     }
 
@@ -516,6 +515,38 @@ namespace chatrobot {
         return found;
     }
 
+    bool DatabaseProxy::setMetaText(const std::string &key, const std::string &value) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        const char *sql = "INSERT OR REPLACE INTO service_text(Key, Value) VALUES(?,?);";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite setMetaText prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, value.c_str(), -1, SQLITE_TRANSIENT);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    std::string DatabaseProxy::getMetaText(const std::string &key) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        const char *sql = "SELECT Value FROM service_text WHERE Key=?;";
+        sqlite3_stmt *stmt = nullptr;
+        std::string value;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            return value;
+        }
+        sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *v = sqlite3_column_text(stmt, 0);
+            if (v) value = reinterpret_cast<const char *>(v);
+        }
+        sqlite3_finalize(stmt);
+        return value;
+    }
+
     int DatabaseProxy::callback(void *context, int argc, char **argv, char **azColName) {
         auto database_proxy = reinterpret_cast<DatabaseProxy *>(context);
         int i;
@@ -786,6 +817,12 @@ namespace chatrobot {
         if (rv != SQLITE_OK) {
             Log::I(DatabaseProxy::TAG,
                    "SQLite signer_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
+        rv = sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS service_text (Key TEXT PRIMARY KEY, Value TEXT)",
+                          callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite service_text statement execution error: %s\n", errMsg);
             return 1;
         }
         const char *create_signer_proof_table = "CREATE TABLE IF NOT EXISTS signer_proof_table (id INTEGER PRIMARY KEY CHECK (id = 1), Signers TEXT NOT NULL, Proof TEXT NOT NULL, SignedAt INTEGER)";

@@ -67,6 +67,8 @@ private:
     static int Signer(void* context,
                       const std::vector<std::string>& args,
                       std::string& errMsg);
+    static int Ens(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Profile(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int PrintInfo(void* context,
                          const std::vector<std::string>& args,
                          std::string& errMsg);

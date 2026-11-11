@@ -18,6 +18,10 @@ using namespace std;
 #include <carrier_session_deprecated.h>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <Log.hpp>
 #include <json.hpp>
 #include <CommonVar.h>
@@ -1463,9 +1467,16 @@ namespace chatrobot {
     void CarrierRobot::updateNickNameCmd(const std::vector<std::string> &args) {
         MUTEX_LOCKER locker_sync_data(_mReplyMessage);
         if (args.size() >= 3) {
-            const std::string friend_id = args[2];
-            if ((*mCreaterFriendId.get()).compare((friend_id)) == 0) {
-                const std::string nick_name = args[1];
+            // Do() appends the sender's userid as the last token; the name is
+            // everything in between, so "/update CSTU Internship" keeps both words.
+            const std::string friend_id = args.back();
+            std::string nick_name;
+            for (size_t i = 1; i + 1 < args.size(); i++) {
+                if (!nick_name.empty()) nick_name += " ";
+                nick_name += args[i];
+            }
+            if (mCreaterFriendId.get() != nullptr && nick_name.size() <= 64
+                && (*mCreaterFriendId.get()).compare((friend_id)) == 0) {
                 mDatabaseProxy->updateGroupNickName(std::make_shared<std::string>(nick_name));
                 json msg;
                 msg["cmd"] =Command_UpdateNickName;
@@ -1748,26 +1759,9 @@ namespace chatrobot {
                                     + signers + "\n"
                                     + std::to_string(static_cast<long long>(now));
 
-        uint8_t sig[CARRIER_IDENTITY_SIGNATURE_BYTES] = {0};
-        Carrier *carrier = reinterpret_cast<Carrier *>(mCarrier.get());
-        if (carrier_identity_sign(carrier, reinterpret_cast<const uint8_t *>(payload.data()),
-                                  payload.size(), sig) != 0) {
-            error = "carrier_identity_sign failed";
-            return false;
-        }
-        if (carrier_identity_verify(group_user_id.c_str(),
-                                    reinterpret_cast<const uint8_t *>(payload.data()),
-                                    payload.size(), sig) != 1) {
-            error = "self-verify failed";
-            return false;
-        }
-
-        static const char kHex[] = "0123456789abcdef";
         std::string hex;
-        hex.reserve(CARRIER_IDENTITY_SIGNATURE_BYTES * 2);
-        for (int i = 0; i < CARRIER_IDENTITY_SIGNATURE_BYTES; i++) {
-            hex += kHex[sig[i] >> 4];
-            hex += kHex[sig[i] & 0x0f];
+        if (!signWithGroupKey(payload, hex, error)) {
+            return false;
         }
         proof = hex + "." + std::to_string(static_cast<long long>(now));
 
@@ -1777,6 +1771,36 @@ namespace chatrobot {
         }
         Log::I(Log::TAG, "signer list signed: [%s] ts=%lld", signers.c_str(),
                static_cast<long long>(now));
+        return true;
+    }
+
+    bool CarrierRobot::signWithGroupKey(const std::string &bytes, std::string &sig_hex,
+                                        std::string &error) {
+        std::string group_user_id;
+        if (getUserId(group_user_id) != 0 || group_user_id.empty()) {
+            error = "group userid unavailable";
+            return false;
+        }
+        uint8_t sig[CARRIER_IDENTITY_SIGNATURE_BYTES] = {0};
+        Carrier *carrier = reinterpret_cast<Carrier *>(mCarrier.get());
+        if (carrier_identity_sign(carrier, reinterpret_cast<const uint8_t *>(bytes.data()),
+                                  bytes.size(), sig) != 0) {
+            error = "carrier_identity_sign failed";
+            return false;
+        }
+        if (carrier_identity_verify(group_user_id.c_str(),
+                                    reinterpret_cast<const uint8_t *>(bytes.data()),
+                                    bytes.size(), sig) != 1) {
+            error = "self-verify failed";
+            return false;
+        }
+        static const char kHex[] = "0123456789abcdef";
+        sig_hex.clear();
+        sig_hex.reserve(CARRIER_IDENTITY_SIGNATURE_BYTES * 2);
+        for (int i = 0; i < CARRIER_IDENTITY_SIGNATURE_BYTES; i++) {
+            sig_hex += kHex[sig[i] >> 4];
+            sig_hex += kHex[sig[i] & 0x0f];
+        }
         return true;
     }
 
@@ -1894,6 +1918,320 @@ namespace chatrobot {
             reply += "\nsignersProof unavailable: " + error;
         }
         sendCommandResponse(friend_id, reply);
+    }
+
+
+    // ---------------------------------------------------------------------
+    // The group's own beagles.eth record (ens-gateway /set, owner = group).
+    // Same body and signed bytes as beagle-app's /api/ens-register for a
+    // node's own identity: signature.message = JSON of the record, signed
+    // XEdDSA by the owner (= this group's Carrier key), hex.
+    // ---------------------------------------------------------------------
+    namespace {
+        std::string ensGateway() {
+            const char *env = std::getenv("BEAGLE_ENS_GATEWAY");
+            std::string url = (env && *env) ? env : "https://ens-gateway.beaglechat.workers.dev";
+            while (!url.empty() && url.back() == '/') url.pop_back();
+            return url;
+        }
+
+        // curl, exec'd without a shell; the body goes over stdin. Returns false
+        // only when curl itself could not run; HTTP status is in `status`.
+        bool httpJson(const std::string &method, const std::string &url, const std::string &body,
+                      long &status, std::string &out) {
+            int in_pipe[2], out_pipe[2];
+            if (pipe(in_pipe) != 0) return false;
+            if (pipe(out_pipe) != 0) { close(in_pipe[0]); close(in_pipe[1]); return false; }
+            pid_t pid = fork();
+            if (pid < 0) {
+                close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);
+                return false;
+            }
+            if (pid == 0) {
+                dup2(in_pipe[0], 0);
+                dup2(out_pipe[1], 1);
+                close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);
+                std::vector<const char *> argv = {"curl", "-sS", "-m", "20", "-X", method.c_str(),
+                                                  "-H", "content-type: application/json",
+                                                  "-w", "\n%{http_code}"};
+                if (method != "GET") {
+                    argv.push_back("--data-binary");
+                    argv.push_back("@-");
+                }
+                argv.push_back(url.c_str());
+                argv.push_back(nullptr);
+                execv("/usr/bin/curl", const_cast<char *const *>(argv.data()));
+                _exit(127);
+            }
+            close(in_pipe[0]);
+            close(out_pipe[1]);
+            signal(SIGPIPE, SIG_IGN);
+            size_t off = 0;
+            while (off < body.size()) {
+                ssize_t n = write(in_pipe[1], body.data() + off, body.size() - off);
+                if (n <= 0) break;
+                off += static_cast<size_t>(n);
+            }
+            close(in_pipe[1]);
+            out.clear();
+            char buf[4096];
+            ssize_t n;
+            while ((n = read(out_pipe[0], buf, sizeof(buf))) > 0) {
+                out.append(buf, static_cast<size_t>(n));
+            }
+            close(out_pipe[0]);
+            int wstatus = 0;
+            waitpid(pid, &wstatus, 0);
+            size_t nl = out.rfind('\n');
+            if (nl == std::string::npos) return false;
+            status = std::strtol(out.c_str() + nl + 1, nullptr, 10);
+            out.resize(nl);
+            return status > 0;
+        }
+
+        std::string joinRest(const std::vector<std::string> &args, size_t from) {
+            // args.back() is the sender's userid (appended by Do()).
+            std::string text;
+            for (size_t i = from; i + 1 < args.size(); i++) {
+                if (!text.empty()) text += " ";
+                text += args[i];
+            }
+            return text;
+        }
+
+        bool validLabel(std::string &name) {
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            const std::string suffix = ".beagles.eth";
+            if (name.size() > suffix.size()
+                && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                name.resize(name.size() - suffix.size());
+            }
+            if (name.empty() || name.size() > 63) return false;
+            for (char ch : name) {
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) return false;
+            }
+            return true;
+        }
+    }
+
+    bool CarrierRobot::ensFetch(const std::string &full_name, json &record, bool &found,
+                                std::string &error) {
+        long status = 0;
+        std::string out;
+        found = false;
+        if (!httpJson("GET", ensGateway() + "/get/" + full_name, "", status, out)) {
+            error = "gateway unreachable";
+            return false;
+        }
+        if (status == 404) return true;
+        if (status != 200) {
+            error = "gateway HTTP " + std::to_string(status);
+            return false;
+        }
+        record = json::parse(out, nullptr, false);
+        if (record.is_discarded() || !record.is_object()) {
+            error = "gateway returned bad JSON";
+            return false;
+        }
+        found = true;
+        return true;
+    }
+
+    bool CarrierRobot::ensPublish(const json &record, std::string &error) {
+        const std::string message = record.dump();
+        std::string sig_hex;
+        if (!signWithGroupKey(message, sig_hex, error)) {
+            return false;
+        }
+        json payload = record;
+        payload["expiration"] = static_cast<long long>(std::time(nullptr)) + 3600;
+        payload["signature"] = {{"hash", sig_hex}, {"signerAddress", record["owner"]},
+                                {"message", message}};
+        long status = 0;
+        std::string out;
+        if (!httpJson("POST", ensGateway() + "/set", payload.dump(), status, out)) {
+            error = "gateway unreachable";
+            return false;
+        }
+        json reply = json::parse(out, nullptr, false);
+        if (status < 200 || status >= 300 || reply.is_discarded() || !reply.is_object()
+            || !reply.value("success", false)) {
+            std::string why = "gateway HTTP " + std::to_string(status);
+            if (!reply.is_discarded() && reply.is_object() && reply.contains("error")
+                && reply["error"].is_string()) {
+                why += ": " + reply["error"].get<std::string>();
+            }
+            error = why;
+            return false;
+        }
+        return true;
+    }
+
+    void CarrierRobot::ensRun(const std::string &friend_id, const std::string &action,
+                              const std::string &arg) {
+        std::unique_lock<std::mutex> busy(mEnsMutex, std::try_to_lock);
+        if (!busy.owns_lock()) {
+            sendCommandResponse(friend_id, "Another beagles.eth update is running; try again.");
+            return;
+        }
+        std::string group_user_id, error;
+        getUserId(group_user_id);
+        char addr_buf[ELA_MAX_ADDRESS_LEN + 1] = {0};
+        ela_get_address(mCarrier.get(), addr_buf, sizeof(addr_buf));
+        const std::string group_address = addr_buf;
+        if (group_user_id.empty() || group_address.empty()) {
+            sendCommandResponse(friend_id, "Group identity unavailable.");
+            return;
+        }
+
+        std::string label = action == "register" ? arg : mDatabaseProxy->getMetaText("ens.name");
+        if (label.empty()) {
+            sendCommandResponse(friend_id, "This group has no beagles.eth name yet. Creator: /ens register <name>");
+            return;
+        }
+        const std::string full_name = label + ".beagles.eth";
+
+        json existing;
+        bool found = false;
+        if (!ensFetch(full_name, existing, found, error)) {
+            sendCommandResponse(friend_id, "Could not read " + full_name + ": " + error);
+            return;
+        }
+
+        if (action == "show") {
+            if (!found) {
+                sendCommandResponse(friend_id, full_name + " is not registered.");
+                return;
+            }
+            json texts = existing.value("texts", json::object());
+            auto text = [&](const char *k) {
+                return texts.contains(k) && texts[k].is_string() ? texts[k].get<std::string>() : std::string();
+            };
+            sendCommandResponse(friend_id,
+                                full_name + "\nowner: " + existing.value("owner", std::string())
+                                + "\ndisplayName: " + text("displayName")
+                                + "\ndescription: " + text("description")
+                                + "\navatar: " + text("avatar")
+                                + "\ncarrierUserId: " + text("carrierUserId")
+                                + "\ncarrierAddress: " + text("carrierAddress")
+                                + "\nupdatedAt: " + (existing.contains("updatedAt") && existing["updatedAt"].is_string()
+                                                    ? existing["updatedAt"].get<std::string>() : std::string()));
+            return;
+        }
+
+        if (found && existing.value("owner", std::string()) != group_user_id) {
+            sendCommandResponse(friend_id, "'" + full_name + "' is already taken by someone else.");
+            return;
+        }
+        if (!found && action != "register") {
+            sendCommandResponse(friend_id, full_name + " is not registered. Creator: /ens register <name>");
+            return;
+        }
+
+        // Carry everything the record already holds (wallet binds, socials) and
+        // set only what this command owns.
+        json texts = json::object();
+        if (found && existing.contains("texts") && existing["texts"].is_object()) {
+            for (auto it = existing["texts"].begin(); it != existing["texts"].end(); ++it) {
+                if (it.value().is_string()) texts[it.key()] = it.value();
+            }
+        }
+        // A self-owned record is a personal record at the gateway; a leftover
+        // signer proof would turn it into a group record the owner is not listed in.
+        texts.erase("signers");
+        texts.erase("signersProof");
+        auto nick = getGroupNickName();
+        if (action == "register" || !texts.contains("displayName")) {
+            texts["displayName"] = (nick.get() != nullptr && !nick->empty()) ? *nick : label;
+        }
+        texts["carrierUserId"] = group_user_id;
+        texts["carrierAddress"] = group_address;
+        if (action == "avatar") texts["avatar"] = arg;
+        if (action == "intro") texts["description"] = arg;
+        if (!texts.contains("description")) texts["description"] = "";
+
+        json record = {
+                {"name", full_name},
+                {"owner", group_user_id},
+                {"addresses", found && existing.contains("addresses") && existing["addresses"].is_object()
+                              ? existing["addresses"] : json::object()},
+                {"texts", texts},
+                {"referee", found && existing.contains("referee") && existing["referee"].is_string()
+                            ? existing["referee"] : json("")},
+                {"nft", found && existing.contains("nft") && existing["nft"].is_string()
+                        ? existing["nft"] : json("")},
+                {"nftid", found && existing.contains("nftid") && existing["nftid"].is_number_integer()
+                          ? existing["nftid"] : json(0)},
+        };
+        if (!ensPublish(record, error)) {
+            sendCommandResponse(friend_id, "beagles.eth update failed: " + error);
+            return;
+        }
+        if (action == "register") {
+            mDatabaseProxy->setMetaText("ens.name", label);
+        }
+        Log::I(Log::TAG, "beagles.eth %s: %s", action.c_str(), full_name.c_str());
+        sendCommandResponse(friend_id,
+                            (action == "register" ? "Registered " : "Updated ") + full_name
+                            + " (owner = this group, signed by the group key).\nhttps://app.beagle.chat/"
+                            + label);
+    }
+
+    // /ens register <name> | /ens show   (register: creator only)
+    void CarrierRobot::ensCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string friend_id = args.back();
+        const std::string action = args.size() >= 3 ? args[1] : "";
+        if (action == "show") {
+            std::thread(&CarrierRobot::ensRun, this, friend_id, std::string("show"), std::string()).detach();
+            return;
+        }
+        if (action != "register" || args.size() != 4) {
+            sendCommandResponse(friend_id, "Usage: /ens register <name> | /ens show");
+            return;
+        }
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can register the group's beagles.eth name.");
+            return;
+        }
+        std::string label = args[2];
+        if (!validLabel(label)) {
+            sendCommandResponse(friend_id, "Name must be 1-63 chars of a-z, 0-9, hyphen.");
+            return;
+        }
+        sendCommandResponse(friend_id, "Registering " + label + ".beagles.eth ...");
+        std::thread(&CarrierRobot::ensRun, this, friend_id, std::string("register"), label).detach();
+    }
+
+    // /profile avatar <https-url> | /profile intro <text> | /profile show
+    void CarrierRobot::profileCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string friend_id = args.back();
+        const std::string action = args.size() >= 3 ? args[1] : "";
+        const std::string usage = "Usage: /profile avatar <https-url> | /profile intro <text> | /profile show";
+        if (action == "show") {
+            std::thread(&CarrierRobot::ensRun, this, friend_id, std::string("show"), std::string()).detach();
+            return;
+        }
+        if (action != "avatar" && action != "intro") {
+            sendCommandResponse(friend_id, usage);
+            return;
+        }
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can change the group's profile.");
+            return;
+        }
+        const std::string value = joinRest(args, 2);
+        if (action == "avatar") {
+            if (args.size() != 4 || value.rfind("https://", 0) != 0 || value.size() > 512) {
+                sendCommandResponse(friend_id, "Usage: /profile avatar <https-url> (one https:// URL, max 512 chars)");
+                return;
+            }
+        } else if (value.empty() || value.size() > 200) {
+            sendCommandResponse(friend_id, "Usage: /profile intro <text> (1-200 chars)");
+            return;
+        }
+        std::thread(&CarrierRobot::ensRun, this, friend_id, action, value).detach();
     }
 
 }
