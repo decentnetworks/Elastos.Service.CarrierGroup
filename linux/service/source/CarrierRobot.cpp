@@ -13,6 +13,7 @@ using namespace std;
 
 #include "CarrierCompat.h"
 #include "CarrierCompat.h"
+#include <carrier.h>
 #include <carrier_session.h>
 #include <carrier_session_deprecated.h>
 #include <thread>
@@ -1701,7 +1702,7 @@ namespace chatrobot {
     // The signer list is the payload the group key signs for the group's
     // beagles.eth record. Sorted by byte order and comma-joined, so the same
     // set always produces the same bytes regardless of insertion order.
-    std::string CarrierRobot::buildSignerProofPayload(std::time_t timestamp) {
+    std::string CarrierRobot::joinedSigners() {
         auto signers = mDatabaseProxy->getSignerUserIdList();
         std::vector<std::string> ids;
         if (signers.get() != nullptr) {
@@ -1710,6 +1711,7 @@ namespace chatrobot {
             }
         }
         std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
 
         std::string joined;
         for (size_t i = 0; i < ids.size(); i++) {
@@ -1718,12 +1720,75 @@ namespace chatrobot {
             }
             joined += ids[i];
         }
+        return joined;
+    }
 
+    std::string CarrierRobot::buildSignerProofPayload(std::time_t timestamp) {
         std::string group_user_id;
         getUserId(group_user_id);
 
-        return std::string("beagle-group-signers\n") + group_user_id + "\n" + joined + "\n"
+        return std::string("beagle-group-signers\n") + group_user_id + "\n" + joinedSigners() + "\n"
                + std::to_string(static_cast<long long>(timestamp));
+    }
+
+    // The ONLY use of the group's Carrier key outside the SDK's own protocol:
+    // an XEdDSA signature over buildSignerProofPayload(), made inside
+    // libcarrier (carrier_identity_sign), which never hands the key out.
+    // Stored as "<lowercase sigHex>.<unix seconds>" next to the exact signer
+    // string it covers; /group/signers serves it from the group DB.
+    bool CarrierRobot::signSignerList(std::string &proof, std::string &error) {
+        std::string group_user_id;
+        if (getUserId(group_user_id) != 0 || group_user_id.empty()) {
+            error = "group userid unavailable";
+            return false;
+        }
+        const std::time_t now = std::time(nullptr);
+        const std::string signers = joinedSigners();
+        const std::string payload = std::string("beagle-group-signers\n") + group_user_id + "\n"
+                                    + signers + "\n"
+                                    + std::to_string(static_cast<long long>(now));
+
+        uint8_t sig[CARRIER_IDENTITY_SIGNATURE_BYTES] = {0};
+        Carrier *carrier = reinterpret_cast<Carrier *>(mCarrier.get());
+        if (carrier_identity_sign(carrier, reinterpret_cast<const uint8_t *>(payload.data()),
+                                  payload.size(), sig) != 0) {
+            error = "carrier_identity_sign failed";
+            return false;
+        }
+        if (carrier_identity_verify(group_user_id.c_str(),
+                                    reinterpret_cast<const uint8_t *>(payload.data()),
+                                    payload.size(), sig) != 1) {
+            error = "self-verify failed";
+            return false;
+        }
+
+        static const char kHex[] = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(CARRIER_IDENTITY_SIGNATURE_BYTES * 2);
+        for (int i = 0; i < CARRIER_IDENTITY_SIGNATURE_BYTES; i++) {
+            hex += kHex[sig[i] >> 4];
+            hex += kHex[sig[i] & 0x0f];
+        }
+        proof = hex + "." + std::to_string(static_cast<long long>(now));
+
+        if (!mDatabaseProxy->setSignerProof(signers, proof, now)) {
+            error = "failed to store proof";
+            return false;
+        }
+        Log::I(Log::TAG, "signer list signed: [%s] ts=%lld", signers.c_str(),
+               static_cast<long long>(now));
+        return true;
+    }
+
+    // Re-sign only when the stored proof does not cover the current list
+    // (e.g. a DB from before signing existed).
+    bool CarrierRobot::ensureSignerProof(std::string &proof, std::string &error) {
+        std::string stored_signers;
+        if (mDatabaseProxy->getSignerProof(stored_signers, proof)
+            && stored_signers == joinedSigners() && !proof.empty()) {
+            return true;
+        }
+        return signSignerList(proof, error);
     }
 
     std::string CarrierRobot::describeSigners() {
@@ -1754,11 +1819,16 @@ namespace chatrobot {
         const std::string action = args[1];
 
         if (action == "list" || action == "ls") {
-            const std::time_t now = std::time(nullptr);
-            sendCommandResponse(friend_id,
-                                describeSigners()
-                                + "\nProof payload (UNSIGNED, not published):\n"
-                                + buildSignerProofPayload(now));
+            std::string proof, error;
+            std::string reply = describeSigners();
+            if (joinedSigners().empty()) {
+                // nothing to prove
+            } else if (ensureSignerProof(proof, error)) {
+                reply += "\nsignersProof: " + proof;
+            } else {
+                reply += "\nsignersProof unavailable: " + error;
+            }
+            sendCommandResponse(friend_id, reply);
             return;
         }
 
@@ -1815,16 +1885,15 @@ namespace chatrobot {
             }
         }
 
-        // TODO(signing): sign this payload with the group's own Carrier key
-        // (XEdDSA) and store signers + signersProof "<sigHex>.<ts>" for the
-        // group's beagles.eth record. The key is not reachable from the SDK
-        // yet, so the payload is reported unsigned and nothing is published.
-        const std::time_t now = std::time(nullptr);
-        const std::string payload = buildSignerProofPayload(now);
-        sendCommandResponse(friend_id,
-                            std::string(action == "add" ? "Signer added: " : "Signer removed: ")
-                            + signer_user_id + "\n\n" + describeSigners()
-                            + "\nProof payload (UNSIGNED, not published):\n" + payload);
+        std::string proof, error;
+        std::string reply = std::string(action == "add" ? "Signer added: " : "Signer removed: ")
+                            + signer_user_id + "\n\n" + describeSigners();
+        if (signSignerList(proof, error)) {
+            reply += "\nsignersProof: " + proof;
+        } else {
+            reply += "\nsignersProof unavailable: " + error;
+        }
+        sendCommandResponse(friend_id, reply);
     }
 
 }

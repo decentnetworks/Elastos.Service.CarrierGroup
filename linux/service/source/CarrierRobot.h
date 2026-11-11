@@ -93,6 +93,9 @@ namespace chatrobot {
         int applySelfDisplayName(int service_id);
         bool requestAgentFriend(const std::string &address, std::string &error_message);
         std::string buildSignerProofPayload(std::time_t timestamp);
+        std::string joinedSigners();
+        bool signSignerList(std::string &proof, std::string &error);
+        bool ensureSignerProof(std::string &proof, std::string &error);
         std::string describeSigners();
         void sendCommandResponse(const std::string &friend_id, const std::string &message);
         std::string normalizeIncomingMessageForStorage(const std::string& friend_id,

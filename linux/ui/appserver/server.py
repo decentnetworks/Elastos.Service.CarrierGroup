@@ -84,6 +84,20 @@ def _read_signer_table(group_id):
     finally:
         conn.close()
 
+def _read_signer_proof(group_id):
+    """(signers, proof) the group service signed last, or (None, None)."""
+    db_path = Path(RUNTIME_DATA_DIR) / ("carrierService" + str(group_id)) / "chatrobot.db"
+    if not db_path.exists():
+        return None, None
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute("select Signers, Proof from signer_proof_table where id=1").fetchone()
+        return (row[0], row[1]) if row else (None, None)
+    except sqlite3.OperationalError:
+        return None, None
+    finally:
+        conn.close()
+
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 def _userid_from_address(address):
@@ -129,9 +143,10 @@ def list_members():
 def group_signers():
     """What a member's client needs to publish this group's beagles.eth record.
 
-    signersProof is null until the service can sign with the group's own
-    Carrier key; the gateway rejects a record without it, so nothing should be
-    published on the strength of this response alone."""
+    signersProof is "<sigHex>.<ts>": the group's own Carrier key (XEdDSA) over
+    "beagle-group-signers\n<groupUserid>\n<signers>\n<ts>". It is signed by
+    the group service on every /signer change and served only while it covers
+    exactly the current list; otherwise it is null."""
     group_id = request.args.get('group_id')
     if not group_id:
         return jsonify({'code':1, 'error':'missing group_id'}), 400
@@ -141,14 +156,18 @@ def group_signers():
     # Sorted, de-duplicated and comma-joined: the exact string that is signed,
     # and the only form the gateway accepts.
     joined = ",".join(sorted(set(signers)))
-    return jsonify({
+    signed_list, proof = _read_signer_proof(group_id)
+    body = {
         'code': 0,
         'group_id': str(group_id),
         'groupUserid': _group_userid(group_id),
         'signers': joined,
-        'signersProof': None,
-        'note': 'unsigned: the group service cannot sign yet',
-    })
+        'signersProof': proof if (proof and signed_list == joined) else None,
+    }
+    if body['signersProof'] is None:
+        body['note'] = ('no signers' if not joined else
+                        'unsigned: run /signer list or change the list to sign it')
+    return jsonify(body)
 
 @app.route('/agent/list', methods=['GET'])
 def list_agents():

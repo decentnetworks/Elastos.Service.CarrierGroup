@@ -76,6 +76,11 @@ namespace chatrobot {
         bool removeSigner(const std::string& user_id);
         bool hasSigner(const std::string& user_id);
         std::shared_ptr<std::vector<std::shared_ptr<std::string>>> getSignerUserIdList();
+        // The group key's signature over the signer list (signer_proof_table,
+        // one row): `signers` is the exact comma-joined string that was signed,
+        // `proof` is "<sigHex>.<ts>".
+        bool setSignerProof(const std::string& signers, const std::string& proof, std::time_t signed_at);
+        bool getSignerProof(std::string& signers, std::string& proof);
     private:
         std::mutex _SyncedGroupInfo;
         std::mutex _SyncedMemberList;

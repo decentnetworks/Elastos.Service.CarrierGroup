@@ -476,6 +476,46 @@ namespace chatrobot {
         return result;
     }
 
+    bool DatabaseProxy::setSignerProof(const std::string &signers, const std::string &proof,
+                                       std::time_t signed_at) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        const char *sql = "INSERT OR REPLACE INTO signer_proof_table(id, Signers, Proof, SignedAt) VALUES(1,?,?,?);";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite setSignerProof prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, signers.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, proof.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(signed_at));
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rv != SQLITE_DONE) {
+            Log::I(DatabaseProxy::TAG, "SQLite setSignerProof error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        return true;
+    }
+
+    bool DatabaseProxy::getSignerProof(std::string &signers, std::string &proof) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        const char *sql = "SELECT Signers, Proof FROM signer_proof_table WHERE id=1;";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            return false;
+        }
+        bool found = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *s = sqlite3_column_text(stmt, 0);
+            const unsigned char *p = sqlite3_column_text(stmt, 1);
+            signers = s ? reinterpret_cast<const char *>(s) : "";
+            proof = p ? reinterpret_cast<const char *>(p) : "";
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+        return found;
+    }
+
     int DatabaseProxy::callback(void *context, int argc, char **argv, char **azColName) {
         auto database_proxy = reinterpret_cast<DatabaseProxy *>(context);
         int i;
@@ -746,6 +786,13 @@ namespace chatrobot {
         if (rv != SQLITE_OK) {
             Log::I(DatabaseProxy::TAG,
                    "SQLite signer_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
+        const char *create_signer_proof_table = "CREATE TABLE IF NOT EXISTS signer_proof_table (id INTEGER PRIMARY KEY CHECK (id = 1), Signers TEXT NOT NULL, Proof TEXT NOT NULL, SignedAt INTEGER)";
+        rv = sqlite3_exec(mDb, create_signer_proof_table, callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG,
+                   "SQLite signer_proof_table statement execution error: %s\n", errMsg);
             return 1;
         }
         // Messages pulled from Express that were parked before this group
