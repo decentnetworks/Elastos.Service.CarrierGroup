@@ -1,4 +1,5 @@
 #include <Command/ChatRobotCmd.hpp>
+#include <Tools/CommandText.h>
 
 #include <iostream>
 #include <iterator>
@@ -41,7 +42,7 @@ int ChatRobotCmd::Do(void* context,
     trim_msg = ltrim(trim_msg);
     if (trim_msg.find('/') != 0) {
         errMsg = "not command";
-        return -10000;
+        return kNotCommand;
     }
 
     const std::string &cmdLine = trim_msg.substr(1);
@@ -65,12 +66,18 @@ int ChatRobotCmd::Do(void* context,
             continue;
         }
 
+        // args.back() is the sender's userid (appended by the caller).
+        if (chatrobot::isCreatorOnlyCommand(cmd) && args.size() >= 2
+            && !reinterpret_cast< chatrobot::CarrierRobot *>(context)->isGroupCreator(args.back())) {
+            errMsg = "/" + cmdInfo.mLongCmd + " is for the group's creator. Type /help.";
+            return kCreatorOnly;
+        }
         int ret = cmdInfo.mFunc(context, args, errMsg);
         return ret;
     }
 
-    errMsg = "Unknown command: " + cmd;
-    return -10000;
+    errMsg = "Unknown command. Type /help.";
+    return kUnknownCommand;
 }
 
 /* =========================================== */

@@ -27,6 +27,7 @@ using namespace std;
 #include <CommonVar.h>
 #include <ThirdParty/CompatibleFileSystem.hpp>
 #include <Command/ChatRobotCmd.hpp>
+#include <Tools/CommandText.h>
 #include "CarrierRobot.h"
 #include "ErrCode.h"
 
@@ -658,6 +659,8 @@ namespace chatrobot {
                 break;
         }
         std::string msg = normalizeIncomingMessageForStorage(*friend_id.get(), *message.get());
+        // An agent's CGR1 envelope that was unwrapped keeps today's handling below.
+        const bool agent_envelope = (msg != *message.get());
         std::string status_message = normalizeAgentStatusEnvelope(*friend_id.get(), *message.get());
         if (!status_message.empty()) {
             relayAgentStatusToMembers(*friend_id.get(), status_message);
@@ -671,9 +674,28 @@ namespace chatrobot {
         if (offline && !acceptOfflineCopy(*friend_id, msg, send_time, post_time)) {
             return;
         }
-        std::string pre_cmd = msg + " " + *friend_id.get();//Pretreatment cmd
-        int ret = ChatRobotCmd::Do(this, pre_cmd, errMsg);
-        if (ret < 0) {
+        // feedback#22: "/" + letter is a command. It is never stored or relayed; an unknown
+        // or refused one gets a private reply. Commands (and so their replies) count under
+        // the anti-flood rate limits, except the creator's, so /unmute always works.
+        if (!agent_envelope && isSlashCommand(msg)) {
+            if (!isGroupCreator(*friend_id) && !floodAllows(*friend_id, msg, false)) {
+                return;
+            }
+            std::string pre_cmd = msg + " " + *friend_id.get();
+            int ret = ChatRobotCmd::Do(this, pre_cmd, errMsg);
+            if (ret == ChatRobotCmd::kUnknownCommand || ret == ChatRobotCmd::kCreatorOnly) {
+                Log::I(TAG, "command refused from=%s len=%zu: %s", friend_id->c_str(), msg.size(),
+                       errMsg.c_str());
+                sendCommandResponse(*friend_id, errMsg);
+            }
+            return;
+        }
+        int ret = ChatRobotCmd::kNotCommand;
+        if (agent_envelope) {
+            std::string pre_cmd = msg + " " + *friend_id.get();//Pretreatment cmd
+            ret = ChatRobotCmd::Do(this, pre_cmd, errMsg);
+        }
+        if (ret == ChatRobotCmd::kNotCommand || ret == ChatRobotCmd::kUnknownCommand) {
             if (!floodAllows(*friend_id, msg, true)) {
                 return;
             }

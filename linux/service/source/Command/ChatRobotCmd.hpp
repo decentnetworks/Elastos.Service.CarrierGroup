@@ -12,6 +12,12 @@ public:
     /*** type define ***/
 
     /*** static function and variable ***/
+    // Do() results below 0 (feedback#22). On kUnknownCommand / kCreatorOnly,
+    // errMsg is the private reply for the sender.
+    static constexpr int kNotCommand = -10000;
+    static constexpr int kUnknownCommand = -1;
+    static constexpr int kCreatorOnly = -2;
+
     static int Do(void* context,
                   const std::string& cmdLine,
                   std::string& errMsg);
