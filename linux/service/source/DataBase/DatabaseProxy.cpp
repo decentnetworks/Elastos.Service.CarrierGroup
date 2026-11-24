@@ -523,6 +523,77 @@ namespace chatrobot {
         return found;
     }
 
+    bool DatabaseProxy::addFloodMute(const std::string &user_id, int64_t muted_at_ms,
+                                     int64_t muted_until_ms) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        const char *sql = "INSERT INTO flood_mute_table(Friendid, MutedAt, MutedUntil) VALUES(?,?,?);";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(TAG, "SQLite addFloodMute prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, user_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, muted_at_ms);
+        sqlite3_bind_int64(stmt, 3, muted_until_ms);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    bool DatabaseProxy::clearFloodMutes(const std::string &user_id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "DELETE FROM flood_mute_table WHERE Friendid=?;", -1, &stmt,
+                               nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, user_id.c_str(), -1, SQLITE_TRANSIENT);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    void DatabaseProxy::forEachFloodMute(int64_t since_ms,
+                                         const std::function<void(const std::string &, int64_t, int64_t)> &fn) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "SELECT Friendid, MutedAt, MutedUntil FROM flood_mute_table"
+                                    " WHERE MutedAt>? ORDER BY MutedAt;", -1, &stmt, nullptr) != SQLITE_OK) {
+            return;
+        }
+        sqlite3_bind_int64(stmt, 1, since_ms);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *id = sqlite3_column_text(stmt, 0);
+            if (!id) continue;
+            fn(reinterpret_cast<const char *>(id), sqlite3_column_int64(stmt, 1),
+               sqlite3_column_int64(stmt, 2));
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    void DatabaseProxy::forEachMessageSince(std::time_t since_us,
+                                            const std::function<void(const std::string &, const std::string &, std::time_t)> &fn) {
+        MUTEX_LOCKER locker_sync_data(_SyncedMessageList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "SELECT Friendid, Msg, SendTimeStamp FROM message_table"
+                                    " WHERE SendTimeStamp>? ORDER BY SendTimeStamp;", -1, &stmt,
+                               nullptr) != SQLITE_OK) {
+            Log::I(TAG, "forEachMessageSince prepare error: %s", sqlite3_errmsg(mDb));
+            return;
+        }
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(since_us));
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *id = sqlite3_column_text(stmt, 0);
+            if (!id) continue;
+            const void *blob = sqlite3_column_blob(stmt, 1);
+            int len = sqlite3_column_bytes(stmt, 1);
+            std::string msg = blob ? std::string(static_cast<const char *>(blob), static_cast<size_t>(len)) : "";
+            fn(reinterpret_cast<const char *>(id), msg,
+               static_cast<std::time_t>(sqlite3_column_int64(stmt, 2)));
+        }
+        sqlite3_finalize(stmt);
+    }
+
     bool DatabaseProxy::setMetaText(const std::string &key, const std::string &value) {
         MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
         const char *sql = "INSERT OR REPLACE INTO service_text(Key, Value) VALUES(?,?);";
@@ -827,6 +898,12 @@ namespace chatrobot {
         if (rv != SQLITE_OK) {
             Log::I(DatabaseProxy::TAG,
                    "SQLite signer_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
+        rv = sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS flood_mute_table (id INTEGER PRIMARY KEY AUTOINCREMENT, Friendid TEXT NOT NULL, MutedAt INTEGER, MutedUntil INTEGER)",
+                          callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite flood_mute_table statement execution error: %s\n", errMsg);
             return 1;
         }
         rv = sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS service_text (Key TEXT PRIMARY KEY, Value TEXT)",

@@ -8,6 +8,8 @@ set(SOURCE_FILES main.cpp carrierService.cpp carrierService.h
         ../common/json.hpp
         ../common/CommonVar.h
         source/Command/ChatRobotCmd.cpp
+        source/Tools/FloodGuard.cpp
+        source/Tools/FloodGuard.h
         source/Command/ChatRobotCmd.hpp
         source/DataBase/DatabaseProxy.h
         source/DataBase/DatabaseProxy.cpp

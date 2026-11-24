@@ -12,7 +12,8 @@
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <iostream>
-#include <memory> // std::unique_ptr
+#include <memory>
+#include <functional> // std::unique_ptr
 #include <ctime>
 #include <regex>
 #include "MessageInfo.h"
@@ -83,6 +84,14 @@ namespace chatrobot {
         bool getSignerProof(std::string& signers, std::string& proof);
         // Small text state (service_text): e.g. "ens.name" = this group's beagles.eth name.
         bool setMetaText(const std::string& key, const std::string& value);
+        // Flood guard state (feedback#21): mutes survive a restart; times in ms.
+        bool addFloodMute(const std::string& user_id, int64_t muted_at_ms, int64_t muted_until_ms);
+        bool clearFloodMutes(const std::string& user_id);
+        void forEachFloodMute(int64_t since_ms,
+                              const std::function<void(const std::string&, int64_t, int64_t)>& fn);
+        // Forwarded messages since since_us (SendTimeStamp, microseconds), oldest first.
+        void forEachMessageSince(std::time_t since_us,
+                                 const std::function<void(const std::string&, const std::string&, std::time_t)>& fn);
         std::string getMetaText(const std::string& key);
     private:
         std::mutex _SyncedGroupInfo;

@@ -643,6 +643,9 @@ namespace chatrobot {
                 if (offline && !acceptOfflineCopy(*friend_id, *message.get(), send_time, post_time)) {
                     return;
                 }
+                if (!floodAllows(*friend_id, *message.get(), false)) {
+                    return;
+                }
                 mDatabaseProxy->addMessgae(friend_id, *message.get(), send_time,
                                            originalSendTime(offline, send_time, post_time));
                 relayMessages();
@@ -671,6 +674,9 @@ namespace chatrobot {
         std::string pre_cmd = msg + " " + *friend_id.get();//Pretreatment cmd
         int ret = ChatRobotCmd::Do(this, pre_cmd, errMsg);
         if (ret < 0) {
+            if (!floodAllows(*friend_id, msg, true)) {
+                return;
+            }
             //save message
             mDatabaseProxy->addMessgae(friend_id, msg, send_time,
                                        originalSendTime(offline, send_time, post_time));
@@ -713,6 +719,7 @@ namespace chatrobot {
         ElaCallbacks carrierCallbacks;
         mLocalPath = std::make_shared<std::string>(data_dir);
         mDatabaseProxy->startDb(data_dir);
+        seedFloodGuard();
         memset(&carrierOpts, 0, sizeof(carrierOpts));
         memset(&carrierCallbacks, 0, sizeof(carrierCallbacks));
         carrierCallbacks.connection_status = OnCarrierConnection;
@@ -2262,6 +2269,140 @@ namespace chatrobot {
             return;
         }
         std::thread(&CarrierRobot::ensRun, this, friend_id, action, value).detach();
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Anti-flood (feedback#21). Rules and defaults: Tools/FloodGuard.h.
+    // Here: episode counting plus a 1-minute hold after a rate trip.
+    // ---------------------------------------------------------------------
+    namespace {
+        bool isCarrierUserId(const std::string &s) {
+            static const std::string kBase58 =
+                    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+            if (s.size() < 43 || s.size() > 45) return false;
+            for (char ch : s) {
+                if (kBase58.find(ch) == std::string::npos) return false;
+            }
+            return true;
+        }
+    }
+
+    void CarrierRobot::seedFloodGuard() {
+        FloodConfig config;
+        config.trip_hold_ms = 10LL * 60 * 1000;   // held until 10 min without sending
+        std::unique_ptr<FloodGuard> guard(new FloodGuard(config));
+        const int64_t now_ms = static_cast<int64_t>(getTimeStamp() / 1000);
+        const int64_t month_ms = config.windows.back().ms;
+        size_t n = 0, mutes = 0;
+        mDatabaseProxy->forEachMessageSince(
+                static_cast<std::time_t>((now_ms - month_ms) * 1000),
+                [&](const std::string &friend_id, const std::string &msg, std::time_t ts_us) {
+                    bool is_text = parseFileMessage(msg, nullptr, nullptr) == FileMessageKind::NotFile;
+                    guard->seedForwarded(friend_id, msg, is_text, static_cast<int64_t>(ts_us / 1000), now_ms);
+                    n++;
+                });
+        mDatabaseProxy->forEachFloodMute(now_ms - config.mute_history_ms,
+                                         [&](const std::string &friend_id, int64_t at, int64_t until) {
+                                             guard->seedMute(friend_id, at, until);
+                                             mutes++;
+                                         });
+        Log::I(TAG, "flood guard seeded: %zu messages (30 days), %zu mutes (7 days)", n, mutes);
+        MUTEX_LOCKER lock(mFloodMutex);
+        mFloodGuard = std::move(guard);
+    }
+
+    bool CarrierRobot::floodAllows(const std::string &friend_id, const std::string &text, bool is_text) {
+        FloodDecision d;
+        {
+            MUTEX_LOCKER lock(mFloodMutex);
+            if (!mFloodGuard) return true;
+            const bool never_block = isGroupCreator(friend_id) || mDatabaseProxy->hasSigner(friend_id);
+            d = mFloodGuard->check(friend_id, text, is_text,
+                                   static_cast<int64_t>(getTimeStamp() / 1000), never_block);
+        }
+        if (d.forward()) return true;
+        Log::I(TAG, "flood drop from=%s len=%zu reason=%s", friend_id.c_str(), text.size(),
+               d.reason.c_str());
+        if (d.muted_now) {
+            const int64_t now_ms = static_cast<int64_t>(getTimeStamp() / 1000);
+            mDatabaseProxy->addFloodMute(friend_id, now_ms, d.muted_until);
+            Log::I(TAG, "flood mute from=%s until_ms=%lld", friend_id.c_str(),
+                   static_cast<long long>(d.muted_until));
+        }
+        if (!d.notice.empty()) {
+            sendCommandResponse(friend_id, d.notice);
+        }
+        if (d.block_now) {
+            Log::I(TAG, "flood block from=%s (muted 3 times in 7 days)", friend_id.c_str());
+            blockMemberByFriendId(friend_id);
+        }
+        return false;
+    }
+
+    void CarrierRobot::blockMemberByFriendId(const std::string &friend_id) {
+        std::shared_ptr<MemberInfo> info = mDatabaseProxy->getMemberInfo(std::make_shared<std::string>(friend_id));
+        if (info.get() == nullptr) {
+            Log::I(TAG, "flood block: %s is not a member", friend_id.c_str());
+            return;
+        }
+        mDatabaseProxy->addBlockMember(info);
+        mDatabaseProxy->removeMember(friend_id);
+        if (ela_remove_friend(mCarrier.get(), friend_id.c_str()) != 0) {
+            Log::I(TAG, "flood block: remove friend %s failed (0x%x)", friend_id.c_str(), ela_get_error());
+        }
+        json msg;
+        msg["cmd"] = Command_UpdateMemberCount;
+        msg["friendid"] = mAddress.c_str();
+        msg["membercount"] = getFriendList()->size();
+        sendMsgForManager(dumpJsonForTransport(msg));
+    }
+
+    // /unblock <userid>   creator: lift a block (manual or automatic) and its mutes.
+    void CarrierRobot::unblockCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string friend_id = args.back();
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can unblock.");
+            return;
+        }
+        if (args.size() != 3 || !isCarrierUserId(args[1])) {
+            sendCommandResponse(friend_id, "Usage: /unblock <userid>");
+            return;
+        }
+        const std::string user_id = args[1];
+        const bool was_blocked = mDatabaseProxy->removeBlockMember(user_id);
+        mDatabaseProxy->clearFloodMutes(user_id);
+        {
+            MUTEX_LOCKER lock(mFloodMutex);
+            if (mFloodGuard) mFloodGuard->clear(user_id);
+        }
+        Log::I(TAG, "flood unblock %s by creator (was blocked: %d)", user_id.c_str(), was_blocked ? 1 : 0);
+        sendCommandResponse(friend_id, was_blocked
+                                       ? "Unblocked " + user_id + ". They can join the group again."
+                                       : user_id + " was not blocked; any mutes are cleared.");
+    }
+
+    // /unmute <userid>   creator: end a flood mute now and forget the member's mutes.
+    void CarrierRobot::unmuteCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string friend_id = args.back();
+        if (!isGroupCreator(friend_id)) {
+            sendCommandResponse(friend_id, "Only group creator can unmute.");
+            return;
+        }
+        if (args.size() != 3 || !isCarrierUserId(args[1])) {
+            sendCommandResponse(friend_id, "Usage: /unmute <userid>");
+            return;
+        }
+        const std::string user_id = args[1];
+        mDatabaseProxy->clearFloodMutes(user_id);
+        {
+            MUTEX_LOCKER lock(mFloodMutex);
+            if (mFloodGuard) mFloodGuard->clear(user_id);
+        }
+        Log::I(TAG, "flood unmute %s by creator", user_id.c_str());
+        sendCommandResponse(friend_id, "Unmuted " + user_id + ".");
     }
 
 }

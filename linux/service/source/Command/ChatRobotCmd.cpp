@@ -19,6 +19,8 @@ const std::vector<ChatRobotCmd::CommandInfo> ChatRobotCmd::gCommandInfoList{
         {"s", "signer",  ChatRobotCmd::Signer,    "Manage beagles.eth signers. /signer add <userid> | /signer del <userid> | /signer list"},
         {"n", "ens",  ChatRobotCmd::Ens,          "beagles.eth name. /ens register <name> | /ens show"},
         {"p", "profile",  ChatRobotCmd::Profile,  "Group profile. /profile avatar <https-url> | /profile intro <text> | /profile show"},
+        {"ub", "unblock",  ChatRobotCmd::Unblock,  "Unblock a member. /unblock <userid>"},
+        {"um", "unmute",  ChatRobotCmd::Unmute,    "End a flood mute. /unmute <userid>"},
         {"e", "exit",  ChatRobotCmd::DeleteGroup,     "Delete group and exit."},
 
 };
@@ -107,6 +109,8 @@ int ChatRobotCmd::Help(void* context,
         msg += "s | signer : Manage beagles.eth signers. /signer add <userid> | /signer del <userid> | /signer list\n";
         msg += "n | ens : /ens register <name> | /ens show\n";
         msg += "p | profile : /profile avatar <https-url> | /profile intro <text> | /profile show\n";
+        msg += "ub | unblock : /unblock <userid>\n";
+        msg += "um | unmute : /unmute <userid>\n";
     } else {
         msg += "g | agent : /agent list\n";
         msg += "s | signer : /signer list\n";
@@ -188,6 +192,18 @@ int ChatRobotCmd::Ens(void *context, const std::vector<std::string> &args,
 int ChatRobotCmd::Profile(void *context, const std::vector<std::string> &args,
                           std::string &errMsg) {
     reinterpret_cast< chatrobot::CarrierRobot *>(context)->profileCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Unblock(void *context, const std::vector<std::string> &args,
+                          std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->unblockCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Unmute(void *context, const std::vector<std::string> &args,
+                         std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->unmuteCmd(args);
     return 0;
 }
 

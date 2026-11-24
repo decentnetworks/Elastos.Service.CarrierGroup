@@ -69,6 +69,8 @@ private:
                       std::string& errMsg);
     static int Ens(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int Profile(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Unblock(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Unmute(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int PrintInfo(void* context,
                          const std::vector<std::string>& args,
                          std::string& errMsg);

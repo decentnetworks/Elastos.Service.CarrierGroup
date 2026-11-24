@@ -12,6 +12,7 @@
 #include <thread>
 #include <mutex>
 #include <json.hpp>
+#include <Tools/FloodGuard.h>
 #include <future>
 #include <queue>
 #include <memory> // std::unique_ptr
@@ -83,6 +84,8 @@ namespace chatrobot {
         void signerCmd(const std::vector<std::string> &args);
         void ensCmd(const std::vector<std::string> &args);
         void profileCmd(const std::vector<std::string> &args);
+        void unblockCmd(const std::vector<std::string> &args);
+        void unmuteCmd(const std::vector<std::string> &args);
         bool isGroupCreator(const std::string& friend_id);
         bool addAgentByAddress(const std::string& address, std::string& error_message);
         bool removeAgentByUserId(const std::string& user_id, std::string& error_message);
@@ -106,6 +109,12 @@ namespace chatrobot {
         bool ensPublish(const nlohmann::json &record, std::string &error);
         void ensRun(const std::string &friend_id, const std::string &action, const std::string &arg);
         std::mutex mEnsMutex;
+        // Anti-flood (feedback#21): false = do not store or forward this message.
+        bool floodAllows(const std::string &friend_id, const std::string &text, bool is_text);
+        void seedFloodGuard();
+        void blockMemberByFriendId(const std::string &friend_id);
+        std::unique_ptr<FloodGuard> mFloodGuard;
+        std::mutex mFloodMutex;
         bool ensureSignerProof(std::string &proof, std::string &error);
         std::string describeSigners();
         void sendCommandResponse(const std::string &friend_id, const std::string &message);
