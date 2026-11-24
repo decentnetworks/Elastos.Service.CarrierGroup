@@ -49,6 +49,17 @@ built in its own worktree `~/devs/agentnet-v2-native-e8eb0b0` with its own
 `CARRIER_LIB_DIR`. The SDK's dependency tarballs are read from
 `<sdk>/build/.tarballs`; seed it (hashes in the SDK's `docs/BUILD-DEPS.md`).
 
+Since 2026-11-24 the libraries come from native `66e45ed` (branch
+`fix/bounded-peer-strings` = e8eb0b0 + bounded peer string copies), built in
+`~/devs/agentnet-v2-native-bounded` with its own `dist/`; `CARRIER_LIB_DIR`
+points there. The ABI is unchanged, so the service binary built against e8eb0b0
+runs on it as is. Why: a friend whose profile field was longer than the SDK's
+fixed arrays aborted the group process in `strcpy` ("buffer overflow
+detected"), and since the profile is persisted the group then aborted on every
+start (group 11, 2026-11-24 15:19 PST). Rollback: point `CARRIER_LIB_DIR` back
+at `agentnet-v2-native-e8eb0b0/dist/lib` (the old drop-in is saved as
+`~/cg-e2e/override.conf.bak-20261124-e8eb0b0`), `daemon-reload`, restart.
+
 ## Stage, then swap
 
 Copy in, then `mv` — never `cp` over the running binary, which fails with
