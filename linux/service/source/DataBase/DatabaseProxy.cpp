@@ -180,14 +180,16 @@ namespace chatrobot {
     }
 
     void DatabaseProxy::addMessgae(std::shared_ptr<std::string> friend_id,
-                                   std::string message, std::time_t send_time) {
+                                   std::string message, std::time_t send_time,
+                                   std::time_t post_time) {
         MUTEX_LOCKER locker_sync_data(_SyncedMessageList);
         if (friend_id.get() == nullptr) {
             Log::I(DatabaseProxy::TAG, "SQLite addMessgae error: friend_id is null");
             return;
         }
 
-        const char *sql = "insert into message_table values(NULL, ?, ?, ?);";
+        const char *sql = "insert into message_table (Friendid, Msg, SendTimeStamp, PostTimeStamp)"
+                          " values(?, ?, ?, ?);";
         sqlite3_stmt *stmt = nullptr;
         int rv = sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr);
         if (rv != SQLITE_OK) {
@@ -204,6 +206,11 @@ namespace chatrobot {
             sqlite3_bind_blob(stmt, 2, message.data(), static_cast<int>(message.size()), SQLITE_TRANSIENT);
         }
         sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(send_time));
+        if (post_time > 0) {
+            sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(post_time));
+        } else {
+            sqlite3_bind_null(stmt, 4);
+        }
 
         rv = sqlite3_step(stmt);
         if (rv != SQLITE_DONE) {
@@ -220,7 +227,7 @@ namespace chatrobot {
         // the newer messages fill it, older ones are left out, as messages
         // past max_limit always were.
         static const size_t kMaxBytes = 64u * 1024u * 1024u;
-        const char *sql = "select FriendId, Msg, SendTimeStamp from message_table"
+        const char *sql = "select FriendId, Msg, SendTimeStamp, PostTimeStamp from message_table"
                           " where FriendId!=? and SendTimeStamp>?"
                           " order by SendTimeStamp desc limit ?;";
         sqlite3_stmt *pStmt = nullptr;
@@ -248,6 +255,7 @@ namespace chatrobot {
             message_info->mMsg = std::make_shared<std::string>(
                     msg != nullptr ? std::string(static_cast<const char *>(msg), msg_len) : std::string());
             message_info->mSendTimeStamp = static_cast<std::time_t>(sqlite3_column_int64(pStmt, 2));
+            message_info->mPostTimeStamp = static_cast<std::time_t>(sqlite3_column_int64(pStmt, 3));
             messages_list->push_back(message_info);
         }
         if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
@@ -791,6 +799,8 @@ namespace chatrobot {
                    "SQLite create_message_table statement execution error: %s\n", errMsg);
             return 1;
         }
+        // feedback#20: the original send time; added to existing databases in place.
+        sqlite3_exec(mDb, "ALTER TABLE message_table ADD COLUMN PostTimeStamp INTEGER", nullptr, nullptr, nullptr);
         char create_blackmember_table[256] = "CREATE TABLE IF NOT EXISTS block_member_table (id INTEGER PRIMARY KEY AUTOINCREMENT,Friendid TEXT NOT NULL)";
         rv = sqlite3_exec(mDb, create_blackmember_table, callback, this, &errMsg);
         if (rv != SQLITE_OK) {

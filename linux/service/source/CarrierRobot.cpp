@@ -643,7 +643,8 @@ namespace chatrobot {
                 if (offline && !acceptOfflineCopy(*friend_id, *message.get(), send_time, post_time)) {
                     return;
                 }
-                mDatabaseProxy->addMessgae(friend_id, *message.get(), send_time);
+                mDatabaseProxy->addMessgae(friend_id, *message.get(), send_time,
+                                           originalSendTime(offline, send_time, post_time));
                 relayMessages();
                 return;
             case FileMessageKind::Invalid:
@@ -671,7 +672,8 @@ namespace chatrobot {
         int ret = ChatRobotCmd::Do(this, pre_cmd, errMsg);
         if (ret < 0) {
             //save message
-            mDatabaseProxy->addMessgae(friend_id, msg, send_time);
+            mDatabaseProxy->addMessgae(friend_id, msg, send_time,
+                                       originalSendTime(offline, send_time, post_time));
             //将该消息转发给其他人
             relayMessages();
         }
@@ -894,6 +896,30 @@ namespace chatrobot {
 
         address = addr;
         return 0;
+    }
+
+    std::time_t CarrierRobot::originalSendTime(bool offline, std::time_t recv_time, int64_t post_time) {
+        // Only an offline (Express) copy carries the sender's time; a live message's
+        // timestamp is its arrival. Kept only when it is sane and clearly earlier.
+        if (!offline) return 0;
+        constexpr int64_t kMinute = 60LL * 1000000LL;
+        int64_t posted = normalizeToMicros(post_time);
+        if (posted <= 0 || posted > static_cast<int64_t>(recv_time) - kMinute) return 0;
+        return static_cast<std::time_t>(posted);
+    }
+
+    std::string CarrierRobot::convertDatetimeToUtcString(std::time_t time) {
+        std::time_t t = time;
+        if (t > 100000000000000LL) {
+            t /= 1000000LL;
+        } else if (t > 100000000000LL) {
+            t /= 1000LL;
+        }
+        std::tm tm_utc{};
+        gmtime_r(&t, &tm_utc);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_utc);
+        return std::string(buf);
     }
 
     std::string CarrierRobot::convertDatetimeToString(std::time_t time) {
@@ -1313,7 +1339,8 @@ namespace chatrobot {
             relay_meta["group"]["nickname"] = group_nickname;
             relay_meta["origin"]["userid"] = sender_user_id;
             relay_meta["origin"]["nickname"] = sender_nickname;
-            relay_meta["sent_at_ms"] = static_cast<long long>(message->mSendTimeStamp / 1000);
+            relay_meta["sent_at_ms"] = static_cast<long long>(
+                    (message->mPostTimeStamp > 0 ? message->mPostTimeStamp : message->mSendTimeStamp) / 1000);
             const size_t body_len = message->mMsg->size() - 4 - file_meta_len;
             std::string meta_str = dumpJsonForTransport(relay_meta);
             if (meta_str.size() > kFileMetaMaxLen
@@ -1331,7 +1358,9 @@ namespace chatrobot {
                         + std::to_string(message->mMsg->size() - 4 - file_meta_len) + " bytes)";
         }
         std::string plain_text = sender_nickname + ": " + body_text
-                                 + " \n[" + this->convertDatetimeToString(message->mSendTimeStamp) + "]";
+                                 + " \n[" + this->convertDatetimeToUtcString(
+                                         message->mPostTimeStamp > 0 ? message->mPostTimeStamp
+                                                                     : message->mSendTimeStamp) + "]";
         if (!to_agent) {
             return plain_text;
         }
@@ -1387,7 +1416,8 @@ namespace chatrobot {
             envelope["message"]["file"]["size"] =
                     static_cast<unsigned long long>(message->mMsg->size() - 4 - file_meta_len);
         }
-        envelope["message"]["timestamp"] = static_cast<long long>(message->mSendTimeStamp);
+        envelope["message"]["timestamp"] = static_cast<long long>(
+                message->mPostTimeStamp > 0 ? message->mPostTimeStamp : message->mSendTimeStamp);
         envelope["render"]["plain"] = plain_text;
         if (is_file) {
             const size_t body_offset = 4 + file_meta_len;

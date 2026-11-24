@@ -45,7 +45,7 @@ namespace chatrobot {
         void updateGroupNickName(std::shared_ptr<std::string> nick_name);
         void
         addMessgae(std::shared_ptr<std::string> friend_id, std::string message,
-                   std::time_t send_time);
+                   std::time_t send_time, std::time_t post_time = 0);
 
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> getFriendList();
 

@@ -123,6 +123,10 @@ namespace chatrobot {
         explicit CarrierRobot();
         std::time_t getTimeStamp();
         std::string convertDatetimeToString(std::time_t time);
+        // "YYYY-MM-DD HH:MM:SS" in UTC: the trailing marker apps read as the send time.
+        std::string convertDatetimeToUtcString(std::time_t time);
+        // The original send time to keep for an Express copy, or 0.
+        std::time_t originalSendTime(bool offline, std::time_t recv_time, int64_t post_time);
         bool relayMessages();
         std::shared_ptr<std::regex> mMsgReg;
         std::mutex _mReplyMessage;

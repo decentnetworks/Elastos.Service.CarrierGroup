@@ -22,6 +22,10 @@ namespace chatrobot {
         std::shared_ptr<std::string> mFriendid;
         std::shared_ptr<std::string> mMsg;
         std::time_t mSendTimeStamp;
+        // When the sender sent it, if known and earlier than arrival (0 = not known).
+        // SendTimeStamp stays the arrival time: relay order and each member's
+        // watermark run on it, so a late message is still delivered.
+        std::time_t mPostTimeStamp = 0;
     };
 }
 
