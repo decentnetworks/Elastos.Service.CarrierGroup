@@ -35,8 +35,10 @@ namespace chatrobot {
         std::shared_ptr<MemberInfo> member_info = this->getMemberInfo(friendid);
         MUTEX_LOCKER locker_sync_data(_SyncedMemberList);
         std::shared_ptr<std::string> tmp_nickname = nickname;
-        std::string t_strSql = "";
-        char *errMsg = NULL;
+        sqlite3_stmt *stmt = nullptr;
+        int rv;
+        // Bound parameters: names are chosen by members, and one with an apostrophe made
+        // the old string-built SQL fail ("near s"), leaving the DB behind memory.
         if (member_info.get() != nullptr) {
             member_info->Lock();
             if (!tmp_nickname->empty()) {
@@ -48,27 +50,39 @@ namespace chatrobot {
                 member_info->mMsgTimeStamp = time_stamp;
             }
             member_info->mStatus = status;
-            t_strSql = "update member_table set NickName='"+*tmp_nickname.get()+"'";
-            t_strSql += ",Status="+std::to_string(member_info->mStatus);
-            t_strSql += ",MsgTimeStamp="+std::to_string(member_info->mMsgTimeStamp);
-            t_strSql += " where Friendid='"+*member_info->mFriendid.get()+"';";
+            const std::string nick = *tmp_nickname;
+            const int st = member_info->mStatus;
+            const sqlite3_int64 ts = static_cast<sqlite3_int64>(member_info->mMsgTimeStamp);
+            const std::string fid = *member_info->mFriendid;
             member_info->UnLock();
-
+            rv = sqlite3_prepare_v2(mDb, "UPDATE member_table SET NickName=?, Status=?, MsgTimeStamp=? WHERE Friendid=?;",
+                                    -1, &stmt, nullptr);
+            if (rv == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, nick.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(stmt, 2, st);
+                sqlite3_bind_int64(stmt, 3, ts);
+                sqlite3_bind_text(stmt, 4, fid.c_str(), -1, SQLITE_TRANSIENT);
+            }
         } else {
             member_info = std::make_shared<chatrobot::MemberInfo>(
                     friendid, nickname, status, time_stamp);
             mMemberList->push_back(member_info);
-            t_strSql = "insert into member_table values(NULL,'"+*member_info->mFriendid.get()+"'";
-            t_strSql += ",'"+*member_info->mNickName.get()+"'";
-            t_strSql += ","+std::to_string(member_info->mStatus);
-            t_strSql += ",0);";
+            rv = sqlite3_prepare_v2(mDb, "INSERT INTO member_table VALUES(NULL,?,?,?,0);", -1, &stmt, nullptr);
+            if (rv == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, member_info->mFriendid->c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(stmt, 2, member_info->mNickName->c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(stmt, 3, member_info->mStatus);
+            }
         }
-        //消息直接入库
-        int rv = sqlite3_exec(mDb, t_strSql.c_str(), callback, this, &errMsg);
-        if (rv != SQLITE_OK) {
-            Log::I(DatabaseProxy::TAG, "SQLite update updateMemberInfo error: %s\n",
-                   errMsg);
+        if (rv == SQLITE_OK) {
+            rv = sqlite3_step(stmt);
+            if (rv != SQLITE_DONE) {
+                Log::I(DatabaseProxy::TAG, "SQLite updateMemberInfo error: %s\n", sqlite3_errmsg(mDb));
+            }
+        } else {
+            Log::I(DatabaseProxy::TAG, "SQLite updateMemberInfo prepare error: %s\n", sqlite3_errmsg(mDb));
         }
+        sqlite3_finalize(stmt);
     }
 
     std::shared_ptr<MemberInfo>

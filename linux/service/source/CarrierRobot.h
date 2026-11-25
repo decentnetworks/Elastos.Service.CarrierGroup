@@ -116,6 +116,7 @@ namespace chatrobot {
     private:
         std::shared_ptr<std::string> resolveGroupDisplayName(int service_id);
         std::shared_ptr<std::string> resolveMemberDisplayName(const char *friendid, const char *display_name);
+        bool isRealMemberName(const char *friendid, const std::string &name);
         int applySelfDisplayName(int service_id);
         bool requestAgentFriend(const std::string &address, std::string &error_message);
         std::string buildSignerProofPayload(std::time_t timestamp);

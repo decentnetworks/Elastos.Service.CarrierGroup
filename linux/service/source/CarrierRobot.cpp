@@ -390,6 +390,16 @@ namespace chatrobot {
         return std::make_shared<std::string>(display_name);
     }
 
+    // A stored name that a person chose, not one we made up (CarrierUser-xxxx, or MemberInfo's
+    // "群主" / "匿名N" for rows without a name).
+    bool CarrierRobot::isRealMemberName(const char *friendid, const std::string &name) {
+        if (name.empty()) return false;
+        if (name == buildFallbackUserName(friendid) || name == "CarrierUser") return false;
+        if (name == "\xE7\xBE\xA4\xE4\xB8\xBB") return false;                 // 群主
+        if (startsWith(name, "\xE5\x8C\xBF\xE5\x90\x8D")) return false;     // 匿名N
+        return true;
+    }
+
     std::shared_ptr<std::string> CarrierRobot::resolveMemberDisplayName(const char *friendid,
                                                                          const char *display_name) {
         std::string normalized_name;
@@ -441,8 +451,24 @@ namespace chatrobot {
         const char *raw_name = info != nullptr ? info->user_info.name : nullptr;
         std::shared_ptr<std::string> nickanme = carrier_robot->resolveMemberDisplayName(friendid,
                                                                                          raw_name);
-        carrier_robot->updateMemberInfo(std::make_shared<std::string>(friendid), nickanme,
-                                        ElaConnectionStatus_Connected);
+        // A userinfo packet just arrived from the friend: this is the only fresh source of
+        // its name, so it always wins. (The status was forced to Connected before.)
+        auto fid = std::make_shared<std::string>(friendid);
+        if (carrier_robot->inRemovedList(fid)) return;
+        std::shared_ptr<MemberInfo> existing = carrier_robot->mDatabaseProxy->getMemberInfo(fid);
+        if (existing.get() == nullptr) return;   // not a member (yet): nothing to rename
+        existing->Lock();
+        const std::string old_name = existing->mNickName ? *existing->mNickName : std::string();
+        const int old_status = existing->mStatus;
+        existing->UnLock();
+        if (old_name != *nickanme) {
+            Log::I(TAG, "member name %s: \"%s\" -> \"%s\" (userinfo)", friendid, old_name.c_str(),
+                   nickanme->c_str());
+        }
+        ElaConnectionStatus status = info != nullptr ? info->status
+                                     : (old_status == 0 ? ElaConnectionStatus_Connected
+                                                        : ElaConnectionStatus_Disconnected);
+        carrier_robot->updateMemberInfo(fid, nickanme, status);
     }
 
     void CarrierRobot::OnCarrierConnection(ElaCarrier *carrier,
@@ -478,7 +504,29 @@ namespace chatrobot {
             const char *raw_name = ret == 0 ? info.user_info.name : nullptr;
             std::shared_ptr<std::string> nickanme = carrier_robot->resolveMemberDisplayName(friendid,
                                                                                              raw_name);
-            carrier_robot->updateMemberInfo(std::make_shared<std::string>(friendid), nickanme, status);
+            // The SDK's cached friend info can be stale: it is saved to carrier.data only when a
+            // friend is added or removed, so after a restart it can hold a name the member changed
+            // long ago (gpu-59 in decent-agents, 2026-11-24). A stored real name is kept here and
+            // changed only by a fresh userinfo packet (OnCarrierFriendInfoChanged). Members without
+            // a real name yet (new, or a placeholder) take the SDK's.
+            auto fid = std::make_shared<std::string>(friendid);
+            std::shared_ptr<MemberInfo> existing = carrier_robot->mDatabaseProxy->getMemberInfo(fid);
+            if (existing.get() != nullptr) {
+                existing->Lock();
+                const std::string cur = existing->mNickName ? *existing->mNickName : std::string();
+                existing->UnLock();
+                if (carrier_robot->isRealMemberName(friendid, cur)) {
+                    if (cur != *nickanme) {
+                        Log::I(TAG, "member name %s: keeping \"%s\" (SDK cache says \"%s\", status %d)",
+                               friendid, cur.c_str(), nickanme->c_str(), status);
+                    }
+                    nickanme = std::make_shared<std::string>("");   // updateMemberInfo keeps the stored name
+                } else if (cur != *nickanme) {
+                    Log::I(TAG, "member name %s: \"%s\" -> \"%s\" (connect)", friendid, cur.c_str(),
+                           nickanme->c_str());
+                }
+            }
+            carrier_robot->updateMemberInfo(fid, nickanme, status);
             if (status == ElaConnectionStatus_Connected && carrier_robot->isGroupCreator(friendid)) {
                 carrier_robot->tellCreatorPendingJoins();
             }
