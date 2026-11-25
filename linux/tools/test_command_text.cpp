@@ -43,7 +43,7 @@ int main() {
     CHECK(isCreatorOnlyCommand("d") && isCreatorOnlyCommand("del"));
     CHECK(isCreatorOnlyCommand("u") && isCreatorOnlyCommand("update"));
     CHECK(isCreatorOnlyCommand("e") && isCreatorOnlyCommand("exit"));
-    CHECK(isCreatorOnlyCommand("pending") && isCreatorOnlyCommand("approve") && isCreatorOnlyCommand("reject"));
+    CHECK(isCreatorOnlyCommand("pending") && isCreatorOnlyCommand("approve") && isCreatorOnlyCommand("reject") && isCreatorOnlyCommand("join"));
     CHECK(!isCreatorOnlyCommand("help") && !isCreatorOnlyCommand("list") && !isCreatorOnlyCommand("l"));
     CHECK(!isCreatorOnlyCommand("address") && !isCreatorOnlyCommand("agent") && !isCreatorOnlyCommand("ub"));
 

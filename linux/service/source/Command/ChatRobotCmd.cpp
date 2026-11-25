@@ -25,6 +25,7 @@ const std::vector<ChatRobotCmd::CommandInfo> ChatRobotCmd::gCommandInfoList{
         {"pending", "pending",  ChatRobotCmd::Pending,  "Join requests waiting. /pending [page]"},
         {"approve", "approve",  ChatRobotCmd::Approve,  "Let a join request in. /approve <n>"},
         {"reject", "reject",  ChatRobotCmd::Reject,     "Drop a join request. /reject <n>"},
+        {"join", "join",  ChatRobotCmd::JoinMode,       "Who may join. /join open | /join approve | /join"},
         {"e", "exit",  ChatRobotCmd::DeleteGroup,     "Delete group and exit."},
 
 };
@@ -117,6 +118,7 @@ int ChatRobotCmd::Help(void* context,
     if (is_creator) {
         msg += "- /block <index> (/b): block a member\n";
         msg += "- /del <index> (/d): remove a member\n";
+        msg += "- /join open | approve: who may join (/join shows it)\n";
         msg += "- /pending [page]: join requests waiting for you\n";
         msg += "- /approve <n> | /reject <n>: answer join request n\n";
         msg += "- /update <name> (/u): rename the group\n";
@@ -237,6 +239,12 @@ int ChatRobotCmd::Approve(void *context, const std::vector<std::string> &args,
 int ChatRobotCmd::Reject(void *context, const std::vector<std::string> &args,
                          std::string &errMsg) {
     reinterpret_cast< chatrobot::CarrierRobot *>(context)->rejectCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::JoinMode(void *context, const std::vector<std::string> &args,
+                           std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->joinModeCmd(args);
     return 0;
 }
 

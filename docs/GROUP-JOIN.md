@@ -1,7 +1,21 @@
-# Joining a group needs the creator's approval
+# Join approval, per group (set by the creator)
 
-Since 2026-11-24 (Weili: "anyone, not for this group, need approval by the
-group admin"), a group no longer accepts every friend request. On all groups:
+Since 2026-11-24 each group has a join mode its creator sets (Weili: "it's
+configurable by admin, other groups are open, only decent-agents need
+approval"):
+
+| command (creator only) | effect |
+|---|---|
+| `/join` | show the current mode |
+| `/join open` | anyone who asks is accepted (the default, as before) |
+| `/join approve` | requests from strangers wait for the creator |
+
+The mode is stored in the group's `chatrobot.db` (`service_text`
+`join.mode`; anything but `approve` is open) and survives restarts. Switching
+to `open` lets in any requests still waiting. decent-agents (group 11) is set
+to `approve`; every other group is open.
+
+In **approve** mode:
 
 | who asks | what happens |
 |---|---|

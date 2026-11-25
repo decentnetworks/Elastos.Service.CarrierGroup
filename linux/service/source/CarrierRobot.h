@@ -92,6 +92,9 @@ namespace chatrobot {
         void pendingCmd(const std::vector<std::string> &args);
         void approveCmd(const std::vector<std::string> &args);
         void rejectCmd(const std::vector<std::string> &args);
+        void joinModeCmd(const std::vector<std::string> &args);
+        bool joinNeedsApproval();
+        size_t admitPendingJoins();   // open mode: let held requests in
         bool isGroupCreator(const std::string& friend_id);
         bool addAgentByAddress(const std::string& address, std::string& error_message);
         bool removeAgentByUserId(const std::string& user_id, std::string& error_message);

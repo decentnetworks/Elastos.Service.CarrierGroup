@@ -2395,6 +2395,11 @@ namespace chatrobot {
             Log::I(TAG, "join refused (blocked) from=%s", friendid.c_str());
             return;
         }
+        if (!joinNeedsApproval()) {
+            Log::I(TAG, "join accepted (open group) from=%s", friendid.c_str());
+            acceptFriend(fid);
+            return;
+        }
         if (mDatabaseProxy->getMemberInfo(fid).get() != nullptr) {
             Log::I(TAG, "join accepted (already a member) from=%s", friendid.c_str());
             acceptFriend(fid);
@@ -2450,6 +2455,53 @@ namespace chatrobot {
             creator->UnLock();
         }
         if (online) mDatabaseProxy->markJoinRequestsNotified();
+    }
+
+    bool CarrierRobot::joinNeedsApproval() {
+        return joinModeIsApprove(mDatabaseProxy->getMetaText("join.mode"));
+    }
+
+    // Requests held while the group needed approval are let in once it is open.
+    size_t CarrierRobot::admitPendingJoins() {
+        size_t n = 0;
+        for (const auto &r : mDatabaseProxy->listJoinRequests()) {
+            auto fid = std::make_shared<std::string>(r.friendid);
+            if (mDatabaseProxy->getBlockMemberInfo(fid).get() == nullptr) {
+                mDatabaseProxy->deleteRemovedListMember(r.friendid);
+                if (ela_accept_friend(mCarrier.get(), r.friendid.c_str()) != 0
+                    && ela_get_error() != ELA_GENERAL_ERROR(ELAERR_ALREADY_EXIST)) {
+                    Log::I(TAG, "join admit #%lld failed (0x%x), kept", static_cast<long long>(r.id), ela_get_error());
+                    continue;
+                }
+                Log::I(TAG, "join admitted #%lld from=%s (group is open)", static_cast<long long>(r.id), r.friendid.c_str());
+                n++;
+            }
+            mDatabaseProxy->deleteJoinRequest(r.id);
+        }
+        return n;
+    }
+
+    // /join [open|approve]   creator: show or set who may join.
+    void CarrierRobot::joinModeCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string &sender = args.back();
+        const std::string want = joinModeArg(args);
+        if (want.empty()) {
+            sendCommandResponse(sender, joinModeText(joinNeedsApproval()));
+            return;
+        }
+        if (want == "?") {
+            sendCommandResponse(sender, "Usage: /join open | /join approve | /join");
+            return;
+        }
+        mDatabaseProxy->setMetaText("join.mode", want);
+        Log::I(TAG, "join mode set to %s by creator", want.c_str());
+        std::string reply = joinModeText(want == "approve");
+        if (want == "open") {
+            const size_t n = admitPendingJoins();
+            if (n) reply += " Let in " + std::to_string(n) + " waiting request" + (n == 1 ? "." : "s.");
+        }
+        sendCommandResponse(sender, reply);
     }
 
     // The creator just came online: one line if requests arrived while they were away.

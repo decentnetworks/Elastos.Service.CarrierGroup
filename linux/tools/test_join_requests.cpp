@@ -57,6 +57,17 @@ int main() {
     CHECK(cut.size() <= kJoinStoredBytes && cut.size() % 3 == 0);
     CHECK(joinStoredText("short") == "short");
 
+    // Join mode: open unless stored "approve".
+    CHECK(!joinModeIsApprove(""));
+    CHECK(!joinModeIsApprove("open"));
+    CHECK(joinModeIsApprove("approve"));
+    CHECK(joinModeArg({"join", "U"}) == "");
+    CHECK(joinModeArg({"join", "open", "U"}) == "open");
+    CHECK(joinModeArg({"join", "Approve", "U"}) == "approve");
+    CHECK(joinModeArg({"join", "closed", "U"}) == "?");
+    CHECK(joinModeText(true).find("/join approve") != std::string::npos);
+    CHECK(joinModeText(false).find("/join open") != std::string::npos);
+
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

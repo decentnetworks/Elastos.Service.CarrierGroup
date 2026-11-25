@@ -80,6 +80,7 @@ private:
     static int Pending(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int Approve(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int Reject(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int JoinMode(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int PrintInfo(void* context,
                          const std::vector<std::string>& args,
                          std::string& errMsg);

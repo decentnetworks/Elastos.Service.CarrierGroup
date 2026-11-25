@@ -29,6 +29,27 @@ namespace chatrobot {
     constexpr size_t kJoinStoredBytes = 512;      // name / hello as stored
     constexpr int64_t kJoinRejectQuietMs = 7LL * 24 * 60 * 60 * 1000;   // after /reject
 
+    // Per-group join mode (Weili: "configurable by admin, other groups are open").
+    // Stored in service_text "join.mode"; anything but "approve" is open.
+    inline bool joinModeIsApprove(const std::string &stored) { return stored == "approve"; }
+
+    // "/join" -> "" (show), "/join open" -> "open", "/join approve" -> "approve",
+    // anything else -> "?" (usage).
+    inline std::string joinModeArg(const std::vector<std::string> &args) {
+        if (args.size() < 3) return "";
+        std::string a = args[1];
+        for (auto &c : a) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        if (a == "open" || a == "approve") return a;
+        return "?";
+    }
+
+    inline std::string joinModeText(bool approve) {
+        return approve ? "Joining this group needs your approval (/join approve). "
+                         "Requests wait in /pending. Type /join open to let anyone in."
+                       : "Anyone can join this group (/join open). "
+                         "Type /join approve to approve each join request yourself.";
+    }
+
     // "/approve 12" -> 12; -1 when missing or not a positive number.
     // Do() appends the sender's userid, so the number is args[1] of 3.
     inline int64_t joinRequestNumberArg(const std::vector<std::string> &args) {
