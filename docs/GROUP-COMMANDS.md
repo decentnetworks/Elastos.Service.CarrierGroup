@@ -32,3 +32,23 @@ Code: `linux/service/source/Tools/CommandText.h` (the classifier),
 
     g++ -std=c++14 -I linux/service/source/Tools -o test_command_text linux/tools/test_command_text.cpp
     ./test_command_text
+
+## /list and /help replies (feedback#26)
+
+`/list [page]` sends one page: 20 members per page, `index: display name`
+(`(online)` when online), with a `Members 21–40 of 507 (12 online)` header and
+`… and N more. Type /list 3.` when there are more. Names are cut to 24 bytes at
+a UTF-8 boundary and control characters become spaces, so a page is at most
+953 bytes, under Carrier's 1,024-byte single message. Userids are never listed.
+Before this, `/list` sent everything in one message: 16,699 bytes for the 507
+members of group 1 (2026-11-24).
+
+`/help` is a list with one command per line (`- /list [page] (/l): …`), joined
+by real `\n`. The newlines were already sent before; an app showing it as one
+paragraph is dropping them when rendering. The list form displays as lines in
+both plain text and Markdown. Both replies go to the sender (the last argument
+`Do()` appends), so `/help x` no longer replies to "x".
+
+Tests: `linux/tools/test_member_list.cpp`:
+
+    g++ -std=c++14 -I linux/service/source/Tools -o test_member_list linux/tools/test_member_list.cpp

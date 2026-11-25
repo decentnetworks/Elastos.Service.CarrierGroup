@@ -105,25 +105,28 @@ int ChatRobotCmd::Help(void* context,
         is_creator = carrier_robot->isGroupCreator(friend_id);
     }
 
-    msg += "h | help : Print help usages.\n";
-    msg += "a | address : Show group address.\n";
-    msg += "l | list : List friends.\n";
+    // One command per line, as a Markdown list so it shows as lines whether
+    // the app renders plain text or Markdown (feedback#26).
+    msg += "Commands:\n";
+    msg += "- /help (/h): this list\n";
+    msg += "- /address (/a): the group address\n";
+    msg += "- /list [page] (/l): members, 20 per page\n";
     if (is_creator) {
-        msg += "b | block : Block a friend by index.\n";
-        msg += "d | del : Delete a friend  by index.\n";
-        msg += "u | update : Update group name.\n";
-        msg += "g | agent : Manage agent. /agent add <address> | /agent del <userid> | /agent list\n";
-        msg += "s | signer : Manage beagles.eth signers. /signer add <userid> | /signer del <userid> | /signer list\n";
-        msg += "n | ens : /ens register <name> | /ens show\n";
-        msg += "p | profile : /profile avatar <https-url> | /profile intro <text> | /profile show\n";
-        msg += "ub | unblock : /unblock <userid>\n";
-        msg += "um | unmute : /unmute <userid>\n";
+        msg += "- /block <index> (/b): block a member\n";
+        msg += "- /del <index> (/d): remove a member\n";
+        msg += "- /update <name> (/u): rename the group\n";
+        msg += "- /agent add <address> | del <userid> | list (/g)\n";
+        msg += "- /signer add <userid> | del <userid> | list (/s)\n";
+        msg += "- /ens register <name> | show (/n)\n";
+        msg += "- /profile avatar <https-url> | intro <text> | show (/p)\n";
+        msg += "- /unblock <userid> (/ub)\n";
+        msg += "- /unmute <userid> (/um)";
     } else {
-        msg += "g | agent : /agent list\n";
-        msg += "s | signer : /signer list\n";
-        msg += "n | ens : /ens show\n";
-        msg += "p | profile : /profile show\n";
-        msg += "Admin group commands are hidden in DM.\n";
+        msg += "- /agent list (/g): agents in this group\n";
+        msg += "- /signer list (/s): beagles.eth signers\n";
+        msg += "- /ens show (/n): the group's beagles.eth name\n";
+        msg += "- /profile show (/p): the group's profile\n";
+        msg += "Creator commands are not shown.";
     }
     carrier_robot->helpCmd(args, msg);
     return 0;

@@ -28,6 +28,7 @@ using namespace std;
 #include <ThirdParty/CompatibleFileSystem.hpp>
 #include <Command/ChatRobotCmd.hpp>
 #include <Tools/CommandText.h>
+#include <Tools/MemberList.h>
 #include "CarrierRobot.h"
 #include "ErrCode.h"
 
@@ -1472,7 +1473,8 @@ namespace chatrobot {
 
     void CarrierRobot::helpCmd(const std::vector<std::string> &args, const std::string &message) {
         if (args.size() >= 2) {
-            const std::string friend_id = args[1];
+            // Do() appends the sender's userid last; "/help x" must not reply to "x".
+            const std::string friend_id = args.back();
             int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
                                                   message.data(), message.size());
             if (ela_ret != 0) {
@@ -1484,34 +1486,31 @@ namespace chatrobot {
 
     }
 
+    // /list [page]: one page of display names (feedback#26). The whole list
+    // used to go out in one message (16.7 KB for 507 members).
     void CarrierRobot::listCmd(const std::vector<std::string> &args) {
         if (args.size() >= 2) {
-            const std::string friend_id = args[1];
+            const std::string friend_id = args.back();
             std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> memberlist = mDatabaseProxy->getFriendList();
-            std::string ret_msg_str = "";
-            for (int i = 0; i < memberlist->size(); i++) {
+            std::vector<MemberLine> lines;
+            lines.reserve(memberlist->size());
+            for (size_t i = 0; i < memberlist->size(); i++) {
                 std::shared_ptr<MemberInfo> memberInfo = memberlist->at(i);
                 if (memberInfo.get() == nullptr) {
                     continue;
                 }
                 memberInfo->Lock();
-                ret_msg_str += std::string(
-                        std::to_string(memberInfo->mIndex) + ": " +
-                        (*memberInfo->mNickName.get()) + " " +
-                        std::string(memberInfo->mStatus == 0 ? "online" : "offline") + "\n");
-                memberInfo->UnLock();//同名还没处理
+                lines.push_back({memberInfo->mIndex,
+                                 memberInfo->mNickName ? *memberInfo->mNickName.get() : std::string(),
+                                 memberInfo->mStatus == 0});
+                memberInfo->UnLock();
             }
-
-            int ela_ret = ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
-                                                  ret_msg_str.data(),
-                                                  ret_msg_str.size());
-            if (ela_ret != 0) {
-                Log::I(Log::TAG,
-                       "listCmd .c_str(): %s errno:(0x%x)",
-                       ret_msg_str.c_str(), ela_get_error());
-            }
+            const size_t page = memberListPageArg(args);
+            const std::string reply = formatMemberPage(lines, page);
+            Log::I(TAG, "listCmd to=%s page=%zu members=%zu bytes=%zu", friend_id.c_str(), page,
+                   lines.size(), reply.size());
+            sendCommandResponse(friend_id, reply);
         }
-
     }
 
     int CarrierRobot::getGroupStatus() {
