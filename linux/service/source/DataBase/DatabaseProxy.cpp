@@ -594,6 +594,159 @@ namespace chatrobot {
         sqlite3_finalize(stmt);
     }
 
+    bool DatabaseProxy::upsertJoinRequest(const std::string &friendid, const std::string &name,
+                                          const std::string &hello, int64_t at_ms, int64_t quiet_ms,
+                                          int64_t &id, bool &is_new, bool &ignored) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        id = 0;
+        is_new = false;
+        ignored = false;
+        int64_t rejected_at = 0;
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "SELECT id, RejectedAt FROM join_request_table WHERE Friendid=?;", -1, &stmt,
+                               nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, friendid.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            id = sqlite3_column_int64(stmt, 0);
+            rejected_at = sqlite3_column_int64(stmt, 1);
+        }
+        sqlite3_finalize(stmt);
+        if (id && rejected_at > 0) {
+            if (at_ms - rejected_at < quiet_ms) {
+                ignored = true;
+                return true;
+            }
+            // The quiet period is over: a fresh request with a fresh number.
+            if (sqlite3_prepare_v2(mDb, "DELETE FROM join_request_table WHERE id=?;", -1, &stmt, nullptr) != SQLITE_OK) {
+                return false;
+            }
+            sqlite3_bind_int64(stmt, 1, id);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            id = 0;
+        }
+        const char *sql = id ? "UPDATE join_request_table SET Name=?, Hello=?, RequestedAt=? WHERE id=?;"
+                             : "INSERT INTO join_request_table(Name, Hello, RequestedAt, Friendid, Notified) VALUES(?,?,?,?,0);";
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            Log::I(TAG, "SQLite upsertJoinRequest prepare error: %s", sqlite3_errmsg(mDb));
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, hello.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, at_ms);
+        if (id) sqlite3_bind_int64(stmt, 4, id);
+        else sqlite3_bind_text(stmt, 4, friendid.c_str(), -1, SQLITE_TRANSIENT);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rv != SQLITE_DONE) return false;
+        if (!id) {
+            id = sqlite3_last_insert_rowid(mDb);
+            is_new = true;
+        }
+        return true;
+    }
+
+    static chatrobot::JoinRequest joinRequestFromRow(sqlite3_stmt *stmt) {
+        chatrobot::JoinRequest r;
+        auto text = [&](int col) {
+            const unsigned char *t = sqlite3_column_text(stmt, col);
+            return t ? std::string(reinterpret_cast<const char *>(t)) : std::string();
+        };
+        r.id = sqlite3_column_int64(stmt, 0);
+        r.friendid = text(1);
+        r.name = text(2);
+        r.hello = text(3);
+        r.requested_at_ms = sqlite3_column_int64(stmt, 4);
+        return r;
+    }
+
+    bool DatabaseProxy::getJoinRequest(int64_t id, chatrobot::JoinRequest &out) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "SELECT id, Friendid, Name, Hello, RequestedAt FROM join_request_table WHERE id=? AND RejectedAt=0;",
+                               -1, &stmt, nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_int64(stmt, 1, id);
+        bool found = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            out = joinRequestFromRow(stmt);
+            found = true;
+        }
+        sqlite3_finalize(stmt);
+        return found;
+    }
+
+    std::vector<chatrobot::JoinRequest> DatabaseProxy::listJoinRequests() {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        std::vector<chatrobot::JoinRequest> out;
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "SELECT id, Friendid, Name, Hello, RequestedAt FROM join_request_table WHERE RejectedAt=0 ORDER BY id;",
+                               -1, &stmt, nullptr) != SQLITE_OK) {
+            return out;
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) out.push_back(joinRequestFromRow(stmt));
+        sqlite3_finalize(stmt);
+        return out;
+    }
+
+    bool DatabaseProxy::rejectJoinRequest(int64_t id, int64_t at_ms) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "UPDATE join_request_table SET RejectedAt=? WHERE id=?;", -1, &stmt,
+                               nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_int64(stmt, 1, at_ms > 0 ? at_ms : 1);
+        sqlite3_bind_int64(stmt, 2, id);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    bool DatabaseProxy::deleteJoinRequest(int64_t id) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "DELETE FROM join_request_table WHERE id=?;", -1, &stmt, nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_int64(stmt, 1, id);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    bool DatabaseProxy::deleteJoinRequestsFrom(const std::string &friendid) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "DELETE FROM join_request_table WHERE Friendid=?;", -1, &stmt, nullptr) != SQLITE_OK) {
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, friendid.c_str(), -1, SQLITE_TRANSIENT);
+        int rv = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return rv == SQLITE_DONE;
+    }
+
+    size_t DatabaseProxy::countJoinRequests(bool only_unnotified) {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_stmt *stmt = nullptr;
+        const char *sql = only_unnotified ? "SELECT COUNT(*) FROM join_request_table WHERE Notified=0 AND RejectedAt=0;"
+                                          : "SELECT COUNT(*) FROM join_request_table WHERE RejectedAt=0;";
+        if (sqlite3_prepare_v2(mDb, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+        size_t n = 0;
+        if (sqlite3_step(stmt) == SQLITE_ROW) n = static_cast<size_t>(sqlite3_column_int64(stmt, 0));
+        sqlite3_finalize(stmt);
+        return n;
+    }
+
+    void DatabaseProxy::markJoinRequestsNotified() {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        sqlite3_exec(mDb, "UPDATE join_request_table SET Notified=1 WHERE Notified=0;", nullptr, nullptr, nullptr);
+    }
+
     bool DatabaseProxy::setMetaText(const std::string &key, const std::string &value) {
         MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
         const char *sql = "INSERT OR REPLACE INTO service_text(Key, Value) VALUES(?,?);";
@@ -906,6 +1059,15 @@ namespace chatrobot {
             Log::I(DatabaseProxy::TAG, "SQLite flood_mute_table statement execution error: %s\n", errMsg);
             return 1;
         }
+        rv = sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS join_request_table (id INTEGER PRIMARY KEY AUTOINCREMENT, Friendid TEXT NOT NULL UNIQUE, Name TEXT, Hello TEXT, RequestedAt INTEGER, Notified INTEGER DEFAULT 0)",
+                          callback, this, &errMsg);
+        if (rv != SQLITE_OK) {
+            Log::I(DatabaseProxy::TAG, "SQLite join_request_table statement execution error: %s\n", errMsg);
+            return 1;
+        }
+        // Added after the table first shipped to the stage group; harmless when present.
+        sqlite3_exec(mDb, "ALTER TABLE join_request_table ADD COLUMN RejectedAt INTEGER DEFAULT 0",
+                     nullptr, nullptr, nullptr);
         rv = sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS service_text (Key TEXT PRIMARY KEY, Value TEXT)",
                           callback, this, &errMsg);
         if (rv != SQLITE_OK) {

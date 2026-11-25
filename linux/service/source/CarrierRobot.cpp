@@ -29,6 +29,7 @@ using namespace std;
 #include <Command/ChatRobotCmd.hpp>
 #include <Tools/CommandText.h>
 #include <Tools/MemberList.h>
+#include <Tools/JoinRequests.h>
 #include "CarrierRobot.h"
 #include "ErrCode.h"
 
@@ -458,7 +459,7 @@ namespace chatrobot {
                                               const char *hello, void *context) {
         Log::I(Log::TAG, "OnCarrierFriendRequest from: %s", friendid);
         auto carrierRobot = reinterpret_cast<CarrierRobot *>(context);
-        carrierRobot->acceptFriend(std::make_shared<std::string>(friendid));
+        carrierRobot->onJoinRequest(friendid, info ? info->name : "", hello ? hello : "");
     }
 
     std::time_t CarrierRobot::getTimeStamp() {
@@ -478,6 +479,9 @@ namespace chatrobot {
             std::shared_ptr<std::string> nickanme = carrier_robot->resolveMemberDisplayName(friendid,
                                                                                              raw_name);
             carrier_robot->updateMemberInfo(std::make_shared<std::string>(friendid), nickanme, status);
+            if (status == ElaConnectionStatus_Connected && carrier_robot->isGroupCreator(friendid)) {
+                carrier_robot->tellCreatorPendingJoins();
+            }
 
         }
     }
@@ -2377,6 +2381,134 @@ namespace chatrobot {
         msg["friendid"] = mAddress.c_str();
         msg["membercount"] = getFriendList()->size();
         sendMsgForManager(dumpJsonForTransport(msg));
+    }
+
+    // ---- Join approval (Weili 2026-11-24: "anyone, not for this group, need approval by
+    // the group admin"). A friend request from a non-member is held in join_request_table
+    // and the creator decides with /approve <n> or /reject <n>. Accepted directly, as before:
+    // the first member of an empty group (the creator), existing members, registered agents.
+    // Blocked users stay refused. Express-parked requests arrive through the same callback.
+    void CarrierRobot::onJoinRequest(const std::string &friendid, const std::string &name,
+                                     const std::string &hello) {
+        auto fid = std::make_shared<std::string>(friendid);
+        if (mDatabaseProxy->getBlockMemberInfo(fid).get() != nullptr) {
+            Log::I(TAG, "join refused (blocked) from=%s", friendid.c_str());
+            return;
+        }
+        if (mDatabaseProxy->getMemberInfo(fid).get() != nullptr) {
+            Log::I(TAG, "join accepted (already a member) from=%s", friendid.c_str());
+            acceptFriend(fid);
+            return;
+        }
+        if (mDatabaseProxy->hasAgent(friendid)) {
+            Log::I(TAG, "join accepted (registered agent) from=%s", friendid.c_str());
+            acceptFriend(fid);
+            return;
+        }
+        if (getFriendList()->empty()) {
+            // The first member becomes the creator. Remember who, so a second stranger
+            // arriving before the first one connects is not let in too.
+            const std::string first = mDatabaseProxy->getMetaText("join.first_member");
+            if (first.empty() || first == friendid) {
+                mDatabaseProxy->setMetaText("join.first_member", friendid);
+                Log::I(TAG, "join accepted (first member, becomes creator) from=%s", friendid.c_str());
+                acceptFriend(fid);
+                return;
+            }
+        }
+        const bool known = [&]() {
+            for (const auto &r : mDatabaseProxy->listJoinRequests()) if (r.friendid == friendid) return true;
+            return false;
+        }();
+        if (!known && mDatabaseProxy->countJoinRequests(false) >= kJoinPendingMax) {
+            Log::I(TAG, "join dropped (%zu already waiting) from=%s", kJoinPendingMax, friendid.c_str());
+            return;
+        }
+        int64_t id = 0;
+        bool is_new = false, ignored = false;
+        const int64_t now_ms = static_cast<int64_t>(getTimeStamp() / 1000);
+        if (!mDatabaseProxy->upsertJoinRequest(friendid, joinStoredText(name), joinStoredText(hello), now_ms,
+                                               kJoinRejectQuietMs, id, is_new, ignored)) {
+            Log::I(TAG, "join request store failed from=%s", friendid.c_str());
+            return;
+        }
+        if (ignored) {
+            Log::I(TAG, "join ignored (rejected within 7 days) from=%s", friendid.c_str());
+            return;
+        }
+        Log::I(TAG, "join held #%lld from=%s name_len=%zu hello_len=%zu new=%d", static_cast<long long>(id),
+               friendid.c_str(), name.size(), hello.size(), is_new ? 1 : 0);
+        if (!is_new || mCreaterFriendId.get() == nullptr) return;   // toxcore re-sends requests: tell once
+        JoinRequest r;
+        if (!mDatabaseProxy->getJoinRequest(id, r)) return;
+        sendCommandResponse(*mCreaterFriendId, joinRequestNotice(r));
+        std::shared_ptr<MemberInfo> creator = mDatabaseProxy->getMemberInfo(mCreaterFriendId);
+        bool online = false;
+        if (creator.get() != nullptr) {
+            creator->Lock();
+            online = creator->mStatus == 0;
+            creator->UnLock();
+        }
+        if (online) mDatabaseProxy->markJoinRequestsNotified();
+    }
+
+    // The creator just came online: one line if requests arrived while they were away.
+    void CarrierRobot::tellCreatorPendingJoins() {
+        const size_t unnotified = mDatabaseProxy->countJoinRequests(true);
+        if (unnotified == 0 || mCreaterFriendId.get() == nullptr) return;
+        sendCommandResponse(*mCreaterFriendId, joinPendingSummary(mDatabaseProxy->countJoinRequests(false)));
+        mDatabaseProxy->markJoinRequestsNotified();
+    }
+
+    void CarrierRobot::pendingCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        sendCommandResponse(args.back(), formatPendingPage(mDatabaseProxy->listJoinRequests(),
+                                                           memberListPageArg(args)));
+    }
+
+    void CarrierRobot::approveCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string &sender = args.back();
+        const int64_t n = joinRequestNumberArg(args);
+        JoinRequest r;
+        if (n < 0 || !mDatabaseProxy->getJoinRequest(n, r)) {
+            sendCommandResponse(sender, n < 0 ? "Usage: /approve <n>. Type /pending."
+                                              : "No join request #" + std::to_string(n) + ". Type /pending.");
+            return;
+        }
+        auto fid = std::make_shared<std::string>(r.friendid);
+        if (mDatabaseProxy->getBlockMemberInfo(fid).get() != nullptr) {
+            mDatabaseProxy->deleteJoinRequest(n);
+            sendCommandResponse(sender, "#" + std::to_string(n) + " is blocked. Type /unblock <userid> first.");
+            return;
+        }
+        mDatabaseProxy->deleteRemovedListMember(r.friendid);
+        int rc = ela_accept_friend(mCarrier.get(), r.friendid.c_str());
+        if (rc != 0 && ela_get_error() != ELA_GENERAL_ERROR(ELAERR_ALREADY_EXIST)) {
+            Log::I(TAG, "join approve #%lld accept failed (0x%x)", static_cast<long long>(n), ela_get_error());
+            sendCommandResponse(sender, "Could not approve #" + std::to_string(n) + " right now. Try again.");
+            return;
+        }
+        mDatabaseProxy->deleteJoinRequest(n);
+        Log::I(TAG, "join approved #%lld from=%s by creator", static_cast<long long>(n), r.friendid.c_str());
+        sendCommandResponse(sender, "Approved #" + std::to_string(n) + " (" + memberListName(r.name, kJoinNameBytes) +
+                                    "). They join when they next come online.");
+    }
+
+    void CarrierRobot::rejectCmd(const std::vector<std::string> &args) {
+        if (args.size() < 2) return;
+        const std::string &sender = args.back();
+        const int64_t n = joinRequestNumberArg(args);
+        JoinRequest r;
+        if (n < 0 || !mDatabaseProxy->getJoinRequest(n, r)) {
+            sendCommandResponse(sender, n < 0 ? "Usage: /reject <n>. Type /pending."
+                                              : "No join request #" + std::to_string(n) + ". Type /pending.");
+            return;
+        }
+        mDatabaseProxy->rejectJoinRequest(n, static_cast<int64_t>(getTimeStamp() / 1000));
+        Log::I(TAG, "join rejected #%lld from=%s by creator", static_cast<long long>(n), r.friendid.c_str());
+        sendCommandResponse(sender, "Rejected #" + std::to_string(n) + " (" + memberListName(r.name, kJoinNameBytes) +
+                                    "). Their requests are ignored for 7 days.");
     }
 
     // /unblock <userid>   creator: lift a block (manual or automatic) and its mutes.

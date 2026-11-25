@@ -77,6 +77,9 @@ private:
     static int Profile(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int Unblock(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int Unmute(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Pending(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Approve(void* context, const std::vector<std::string> &args, std::string &errMsg);
+    static int Reject(void* context, const std::vector<std::string> &args, std::string &errMsg);
     static int PrintInfo(void* context,
                          const std::vector<std::string>& args,
                          std::string& errMsg);

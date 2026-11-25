@@ -22,6 +22,9 @@ const std::vector<ChatRobotCmd::CommandInfo> ChatRobotCmd::gCommandInfoList{
         {"p", "profile",  ChatRobotCmd::Profile,  "Group profile. /profile avatar <https-url> | /profile intro <text> | /profile show"},
         {"ub", "unblock",  ChatRobotCmd::Unblock,  "Unblock a member. /unblock <userid>"},
         {"um", "unmute",  ChatRobotCmd::Unmute,    "End a flood mute. /unmute <userid>"},
+        {"pending", "pending",  ChatRobotCmd::Pending,  "Join requests waiting. /pending [page]"},
+        {"approve", "approve",  ChatRobotCmd::Approve,  "Let a join request in. /approve <n>"},
+        {"reject", "reject",  ChatRobotCmd::Reject,     "Drop a join request. /reject <n>"},
         {"e", "exit",  ChatRobotCmd::DeleteGroup,     "Delete group and exit."},
 
 };
@@ -114,6 +117,8 @@ int ChatRobotCmd::Help(void* context,
     if (is_creator) {
         msg += "- /block <index> (/b): block a member\n";
         msg += "- /del <index> (/d): remove a member\n";
+        msg += "- /pending [page]: join requests waiting for you\n";
+        msg += "- /approve <n> | /reject <n>: answer join request n\n";
         msg += "- /update <name> (/u): rename the group\n";
         msg += "- /agent add <address> | del <userid> | list (/g)\n";
         msg += "- /signer add <userid> | del <userid> | list (/s)\n";
@@ -214,6 +219,24 @@ int ChatRobotCmd::Unblock(void *context, const std::vector<std::string> &args,
 int ChatRobotCmd::Unmute(void *context, const std::vector<std::string> &args,
                          std::string &errMsg) {
     reinterpret_cast< chatrobot::CarrierRobot *>(context)->unmuteCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Pending(void *context, const std::vector<std::string> &args,
+                          std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->pendingCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Approve(void *context, const std::vector<std::string> &args,
+                          std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->approveCmd(args);
+    return 0;
+}
+
+int ChatRobotCmd::Reject(void *context, const std::vector<std::string> &args,
+                         std::string &errMsg) {
+    reinterpret_cast< chatrobot::CarrierRobot *>(context)->rejectCmd(args);
     return 0;
 }
 

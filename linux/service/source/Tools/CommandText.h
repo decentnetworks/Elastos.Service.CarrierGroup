@@ -27,7 +27,8 @@ namespace chatrobot {
     // (/agent, /signer, /ens, /profile, /unblock, /unmute reply on their own.)
     inline bool isCreatorOnlyCommand(const std::string &name) {
         return name == "b" || name == "block" || name == "d" || name == "del"
-               || name == "u" || name == "update" || name == "e" || name == "exit";
+               || name == "u" || name == "update" || name == "e" || name == "exit"
+               || name == "pending" || name == "approve" || name == "reject";
     }
 
 }  // namespace chatrobot

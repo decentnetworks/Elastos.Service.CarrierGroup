@@ -15,6 +15,7 @@
 #include <memory>
 #include <functional> // std::unique_ptr
 #include <ctime>
+#include <Tools/JoinRequests.h>
 #include <regex>
 #include "MessageInfo.h"
 #include "MemberInfo.h"
@@ -93,6 +94,21 @@ namespace chatrobot {
         void forEachMessageSince(std::time_t since_us,
                                  const std::function<void(const std::string&, const std::string&, std::time_t)>& fn);
         std::string getMetaText(const std::string& key);
+        // Join requests held for the creator (join_request_table). upsert keeps the
+        // number of an earlier request from the same userid; is_new says whether it
+        // was new. Notified = the creator was told.
+        // A request rejected less than quiet_ms ago is ignored (ignored = true): the
+        // requester's client keeps re-sending it.
+        bool upsertJoinRequest(const std::string& friendid, const std::string& name,
+                               const std::string& hello, int64_t at_ms, int64_t quiet_ms,
+                               int64_t& id, bool& is_new, bool& ignored);
+        bool rejectJoinRequest(int64_t id, int64_t at_ms);
+        bool getJoinRequest(int64_t id, chatrobot::JoinRequest& out);
+        std::vector<chatrobot::JoinRequest> listJoinRequests();
+        bool deleteJoinRequest(int64_t id);
+        bool deleteJoinRequestsFrom(const std::string& friendid);
+        size_t countJoinRequests(bool only_unnotified);
+        void markJoinRequestsNotified();
     private:
         std::mutex _SyncedGroupInfo;
         std::mutex _SyncedMemberList;
