@@ -13,6 +13,7 @@ set(SOURCE_FILES main.cpp carrierService.cpp carrierService.h
         source/Tools/CommandText.h
         source/Tools/MemberList.h
         source/Tools/JoinRequests.h
+        source/Tools/MemberTarget.h
         source/Command/ChatRobotCmd.hpp
         source/DataBase/DatabaseProxy.h
         source/DataBase/DatabaseProxy.cpp

@@ -266,6 +266,41 @@ namespace chatrobot {
         return messages_list;
     }
 
+    void DatabaseProxy::setBlockName(const std::string &friendid, const std::string &name) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(mDb, "INSERT OR REPLACE INTO block_name_table(Friendid, NickName) VALUES(?,?);",
+                               -1, &stmt, nullptr) != SQLITE_OK) {
+            return;
+        }
+        sqlite3_bind_text(stmt, 1, friendid.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    std::string DatabaseProxy::getBlockName(const std::string &friendid) {
+        MUTEX_LOCKER locker_sync_data(_SyncedSignerList);
+        sqlite3_stmt *stmt = nullptr;
+        std::string name;
+        if (sqlite3_prepare_v2(mDb, "SELECT NickName FROM block_name_table WHERE Friendid=?;", -1, &stmt,
+                               nullptr) != SQLITE_OK) {
+            return name;
+        }
+        sqlite3_bind_text(stmt, 1, friendid.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *v = sqlite3_column_text(stmt, 0);
+            if (v) name = reinterpret_cast<const char *>(v);
+        }
+        sqlite3_finalize(stmt);
+        return name;
+    }
+
+    std::vector<std::shared_ptr<MemberInfo>> DatabaseProxy::getBlockMemberListCopy() {
+        MUTEX_LOCKER locker_sync_data(_SyncedBlockMemberList);
+        return *mBlockMemberList;
+    }
+
     std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> DatabaseProxy::getFriendList() {
         MUTEX_LOCKER locker_sync_data(_SyncedMemberList);
         return mMemberList;
@@ -1065,6 +1100,8 @@ namespace chatrobot {
             Log::I(DatabaseProxy::TAG, "SQLite join_request_table statement execution error: %s\n", errMsg);
             return 1;
         }
+        sqlite3_exec(mDb, "CREATE TABLE IF NOT EXISTS block_name_table (Friendid TEXT PRIMARY KEY, NickName TEXT)",
+                     nullptr, nullptr, nullptr);
         // Added after the table first shipped to the stage group; harmless when present.
         sqlite3_exec(mDb, "ALTER TABLE join_request_table ADD COLUMN RejectedAt INTEGER DEFAULT 0",
                      nullptr, nullptr, nullptr);

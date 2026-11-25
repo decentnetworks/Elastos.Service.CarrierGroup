@@ -116,8 +116,8 @@ int ChatRobotCmd::Help(void* context,
     msg += "- /address (/a): the group address\n";
     msg += "- /list [page] (/l): members, 20 per page\n";
     if (is_creator) {
-        msg += "- /block <index> (/b): block a member\n";
-        msg += "- /del <index> (/d): remove a member\n";
+        msg += "- /del <number|userid|name> (/d): remove a member\n";
+        msg += "- /block <number|userid|name> (/b): remove and keep out\n";
         msg += "- /join open | approve: who may join (/join shows it)\n";
         msg += "- /pending [page]: join requests waiting for you\n";
         msg += "- /approve <n> | /reject <n>: answer join request n\n";
@@ -126,7 +126,7 @@ int ChatRobotCmd::Help(void* context,
         msg += "- /signer add <userid> | del <userid> | list (/s)\n";
         msg += "- /ens register <name> | show (/n)\n";
         msg += "- /profile avatar <https-url> | intro <text> | show (/p)\n";
-        msg += "- /unblock <userid> (/ub)\n";
+        msg += "- /unblock <number|userid|name> (/ub)\n";
         msg += "- /unmute <userid> (/um)";
     } else {
         msg += "- /agent list (/g): agents in this group\n";

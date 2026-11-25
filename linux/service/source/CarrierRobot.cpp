@@ -1583,79 +1583,123 @@ namespace chatrobot {
     }
 
     void CarrierRobot::blockFriendCmd(const std::vector<std::string> &args) {
-        if (args.size() >= 3) {
-            const std::string friend_id = args[2];
-            if ((*mCreaterFriendId.get()).compare((friend_id)) == 0) {
-                std::string del_userindex = args[1];
-                int user_num = std::atoi(del_userindex.c_str());
-                std::shared_ptr<MemberInfo> memberInfo = mDatabaseProxy->getMemberInfo(user_num);
-                char msg_str[256];
-                if (memberInfo.get() != nullptr) {
-                    memberInfo->Lock();
-                    std::string del_friend_id = *memberInfo->mFriendid.get();
-                    memberInfo->UnLock();
-                    mDatabaseProxy->addBlockMember(memberInfo);
-                    mDatabaseProxy->removeMember(del_friend_id);
-
-                    int ela_ret = ela_remove_friend(mCarrier.get(),
-                                                    memberInfo->mFriendid.get()->c_str());
-                    sprintf(msg_str, "%s has been blocked!",
-                            memberInfo->mNickName.get()->c_str());
-                    if (ela_ret != 0) {
-                        Log::I(Log::TAG,
-                               "delCmd can't delete this user: %s errno:(0x%x)",
-                               memberInfo->mFriendid.get()->c_str(), ela_get_error());
-                    }
-                } else {
-                    sprintf(msg_str, "num %s member not exist!", del_userindex.c_str());
-                }
-                ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
-                                        msg_str, strlen(msg_str));
-                json msg;
-                msg["cmd"] = Command_UpdateMemberCount;
-                msg["friendid"] = mAddress.c_str();
-                msg["membercount"] = getFriendList()->size();
-                sendMsgForManager(dumpJsonForTransport(msg));
-            }
-        }
+        removeMemberCmd(args, true);
     }
 
     void CarrierRobot::delCmd(const std::vector<std::string> &args) {
-        if (args.size() >= 3) {
-            const std::string friend_id = args[2];
-            if ((*mCreaterFriendId.get()).compare((friend_id)) == 0) {
-                std::string del_userindex = args[1];
-                int user_num = std::atoi(del_userindex.c_str());
-                std::shared_ptr<MemberInfo> memberInfo = mDatabaseProxy->getMemberInfo(user_num);
-                char msg_str[256];
-                if (memberInfo.get() != nullptr) {
-                    memberInfo->Lock();
-                    std::string del_friend_id = *memberInfo->mFriendid.get();
-                    memberInfo->UnLock();
-                    mDatabaseProxy->removeMember(del_friend_id);
-                    int ela_ret = ela_remove_friend(mCarrier.get(),
-                                                    memberInfo->mFriendid.get()->c_str());
-                    sprintf(msg_str, "%s has been kicked out!",
-                            memberInfo->mNickName.get()->c_str());
-                    if (ela_ret != 0) {
-                        Log::I(Log::TAG,
-                               "delCmd can't delete this user: %s errno:(0x%x)",
-                               memberInfo->mFriendid.get()->c_str(), ela_get_error());
-                    }
-                } else {
-                    sprintf(msg_str, "num %s member not exist!", del_userindex.c_str());
-                }
+        removeMemberCmd(args, false);
+    }
 
-                ela_send_friend_message_noreceipt(mCarrier.get(), friend_id.c_str(),
-                                        msg_str, strlen(msg_str));
+    namespace {
+        bool isCarrierUserId(const std::string &s);   // defined with the flood commands
+    }
 
-                json msg;
-                msg["cmd"] = Command_UpdateMemberCount;
-                msg["friendid"] = mAddress.c_str();
-                msg["membercount"] = getFriendList()->size();
-                sendMsgForManager(dumpJsonForTransport(msg));
-            }
+    std::vector<TargetCandidate> CarrierRobot::memberCandidates() {
+        std::vector<TargetCandidate> out;
+        auto list = mDatabaseProxy->getFriendList();
+        for (size_t i = 0; i < list->size(); i++) {
+            std::shared_ptr<MemberInfo> m = list->at(i);
+            if (!m) continue;
+            m->Lock();
+            out.push_back({m->mIndex, m->mFriendid ? *m->mFriendid : std::string(),
+                           m->mNickName ? *m->mNickName : std::string()});
+            m->UnLock();
         }
+        return out;
+    }
+
+    // /del and /block take the /list number, a userid (or a unique 8+ character prefix),
+    // a display name, or a beagles.eth name (Weili 2026-11-24). Ambiguous: nothing is done.
+    void CarrierRobot::removeMemberCmd(const std::vector<std::string> &args, bool block) {
+        if (args.size() < 2) return;
+        const std::string sender = args.back();
+        const std::string verb = block ? "block" : "del";
+        if (!isGroupCreator(sender)) return;   // Do() already refused non-creators
+        const std::string query = targetArg(args);
+        if (query.empty()) {
+            sendCommandResponse(sender, "Usage: /" + verb + " <number|userid|name>. Type /list for numbers.");
+            return;
+        }
+        TargetMatch r = resolveTarget(query, memberCandidates());
+        switch (r.kind) {
+            case TargetMatch::One:
+                removeMemberByUserId(sender, r.matches[0].userid, block);
+                return;
+            case TargetMatch::Many:
+                sendCommandResponse(sender, formatTargetMatches(verb, query, r.matches));
+                return;
+            case TargetMatch::NeedEns:
+                std::thread(&CarrierRobot::removeMemberEnsLookup, this, sender, r.ens_name, block).detach();
+                return;
+            case TargetMatch::None:
+                sendCommandResponse(sender, "No member matches \"" + memberListName(query, 40) + "\". Type /list.");
+                return;
+        }
+    }
+
+    void CarrierRobot::removeMemberByUserId(const std::string &sender, const std::string &userid, bool block) {
+        MUTEX_LOCKER lock(mMemberCmdMutex);
+        const std::string verb = block ? "block" : "del";
+        if (isGroupCreator(userid)) {
+            sendCommandResponse(sender, "You can't /" + verb + " yourself.");
+            return;
+        }
+        std::shared_ptr<MemberInfo> m = mDatabaseProxy->getMemberInfo(std::make_shared<std::string>(userid));
+        if (!m) {
+            sendCommandResponse(sender, shortUserId(userid) + " is not a member. Type /list.");
+            return;
+        }
+        m->Lock();
+        const std::string name = m->mNickName ? *m->mNickName : std::string();
+        m->UnLock();
+        if (block) {
+            mDatabaseProxy->addBlockMember(m);
+            mDatabaseProxy->setBlockName(userid, name);
+        }
+        mDatabaseProxy->removeMember(userid);
+        if (ela_remove_friend(mCarrier.get(), userid.c_str()) != 0) {
+            Log::I(TAG, "%s: remove friend %s failed (0x%x)", verb.c_str(), userid.c_str(), ela_get_error());
+        }
+        Log::I(TAG, "member %s %s by creator", userid.c_str(), block ? "blocked" : "removed");
+        sendCommandResponse(sender, memberListName(name, kMemberListNameBytes) + " (" + shortUserId(userid) + ") " +
+                                    (block ? "is blocked." : "was removed. They can ask to join again."));
+        json msg;
+        msg["cmd"] = Command_UpdateMemberCount;
+        msg["friendid"] = mAddress.c_str();
+        msg["membercount"] = getFriendList()->size();
+        sendMsgForManager(dumpJsonForTransport(msg));
+    }
+
+    // beagles.eth name -> Carrier userid: the record's texts.carrierUserId (owner can be
+    // an Ethereum address for names registered on chain, so it is used only if it is a userid).
+    bool CarrierRobot::ensUserId(const std::string &full_name, std::string &userid, std::string &error) {
+        json record;
+        bool found = false;
+        if (!ensFetch(full_name, record, found, error)) return false;
+        if (!found) { error = full_name + " is not registered"; return false; }
+        std::string uid;
+        auto texts = record.find("texts");
+        if (texts != record.end() && texts->is_object()) {
+            auto it = texts->find("carrierUserId");
+            if (it != texts->end() && it->is_string()) uid = it->get<std::string>();
+        }
+        if (uid.empty()) {
+            const std::string owner = record.value("owner", std::string());
+            if (isCarrierUserId(owner)) uid = owner;
+        }
+        if (!isCarrierUserId(uid)) { error = full_name + " has no Beagle userid"; return false; }
+        userid = uid;
+        return true;
+    }
+
+    void CarrierRobot::removeMemberEnsLookup(const std::string &sender, const std::string &name, bool block) {
+        std::string userid, error;
+        if (!ensUserId(name, userid, error)) {
+            sendCommandResponse(sender, "No member matches \"" + memberListName(name, 40) + "\" (" + error + ").");
+            return;
+        }
+        Log::I(TAG, "member target %s -> %s (beagles.eth)", name.c_str(), userid.c_str());
+        removeMemberByUserId(sender, userid, block);
     }
 
     void CarrierRobot::registerCarrierCallBack(const std::function<void (const std::string)> &carrierCallBack) {
@@ -2372,6 +2416,12 @@ namespace chatrobot {
             return;
         }
         mDatabaseProxy->addBlockMember(info);
+        {
+            info->Lock();
+            const std::string blocked_name = info->mNickName ? *info->mNickName : std::string();
+            info->UnLock();
+            mDatabaseProxy->setBlockName(friend_id, blocked_name);
+        }
         mDatabaseProxy->removeMember(friend_id);
         if (ela_remove_friend(mCarrier.get(), friend_id.c_str()) != 0) {
             Log::I(TAG, "flood block: remove friend %s failed (0x%x)", friend_id.c_str(), ela_get_error());
@@ -2571,11 +2621,48 @@ namespace chatrobot {
             sendCommandResponse(friend_id, "Only group creator can unblock.");
             return;
         }
-        if (args.size() != 3 || !isCarrierUserId(args[1])) {
-            sendCommandResponse(friend_id, "Usage: /unblock <userid>");
+        const std::string query = targetArg(args);
+        if (query.empty()) {
+            sendCommandResponse(friend_id, "Usage: /unblock <number|userid|name>");
             return;
         }
-        const std::string user_id = args[1];
+        std::vector<TargetCandidate> blocked;
+        for (const auto &m : mDatabaseProxy->getBlockMemberListCopy()) {
+            if (!m) continue;
+            m->Lock();
+            std::string uid = m->mFriendid ? *m->mFriendid : std::string();
+            std::string nm = m->mNickName ? *m->mNickName : std::string();
+            m->UnLock();
+            // Prefer the stored name: a block list loaded at startup has none, and MemberInfo
+            // then makes up a placeholder ("匿名N").
+            const std::string stored = mDatabaseProxy->getBlockName(uid);
+            if (!stored.empty()) nm = stored;
+            blocked.push_back({-1, uid, nm});   // there is no numbered block list
+        }
+        TargetMatch r = resolveTarget(query, blocked);
+        if (r.kind == TargetMatch::One) {
+            unblockUserId(friend_id, r.matches[0].userid);
+        } else if (r.kind == TargetMatch::Many) {
+            sendCommandResponse(friend_id, formatTargetMatches("unblock", query, r.matches));
+        } else if (isCarrierUserId(trimSpaces(query))) {
+            unblockUserId(friend_id, trimSpaces(query));   // not on the block list: clears mutes, as before
+        } else if (r.kind == TargetMatch::NeedEns) {
+            std::thread(&CarrierRobot::unblockEnsLookup, this, friend_id, r.ens_name).detach();
+        } else {
+            sendCommandResponse(friend_id, "No blocked member matches \"" + memberListName(query, 40) + "\".");
+        }
+    }
+
+    void CarrierRobot::unblockEnsLookup(const std::string &sender, const std::string &name) {
+        std::string userid, error;
+        if (!ensUserId(name, userid, error)) {
+            sendCommandResponse(sender, "No blocked member matches \"" + memberListName(name, 40) + "\" (" + error + ").");
+            return;
+        }
+        unblockUserId(sender, userid);
+    }
+
+    void CarrierRobot::unblockUserId(const std::string &friend_id, const std::string &user_id) {
         const bool was_blocked = mDatabaseProxy->removeBlockMember(user_id);
         mDatabaseProxy->clearFloodMutes(user_id);
         {

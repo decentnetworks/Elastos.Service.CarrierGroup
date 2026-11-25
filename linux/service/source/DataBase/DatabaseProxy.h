@@ -50,6 +50,12 @@ namespace chatrobot {
                    std::time_t send_time, std::time_t post_time = 0);
 
         std::shared_ptr<std::vector<std::shared_ptr<MemberInfo>>> getFriendList();
+        // A copy of the block list (block_member_table), for /unblock <name|number>.
+        std::vector<std::shared_ptr<MemberInfo>> getBlockMemberListCopy();
+        // Display name of a blocked user (block_name_table), so /unblock <name> works
+        // after a restart; block_member_table itself only holds the userid.
+        void setBlockName(const std::string& friendid, const std::string& name);
+        std::string getBlockName(const std::string& friendid);
 
         bool removeMember(std::string friendid);
         bool deleteRemovedListMember(std::string friendid);

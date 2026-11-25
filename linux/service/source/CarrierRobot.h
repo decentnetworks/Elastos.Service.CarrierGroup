@@ -12,6 +12,7 @@
 #include <thread>
 #include <mutex>
 #include <json.hpp>
+#include <Tools/MemberTarget.h>
 #include <Tools/FloodGuard.h>
 #include <future>
 #include <queue>
@@ -78,6 +79,15 @@ namespace chatrobot {
         void listCmd(const std::vector<std::string> &args);
         void delCmd(const std::vector<std::string> &args);
         void blockFriendCmd(const std::vector<std::string> &args);
+        // /del and /block <number|userid|8+ prefix|name|x.beagles.eth>
+        void removeMemberCmd(const std::vector<std::string> &args, bool block);
+        void removeMemberByUserId(const std::string &sender, const std::string &userid, bool block);
+        void removeMemberEnsLookup(const std::string &sender, const std::string &name, bool block);
+        void unblockUserId(const std::string &sender, const std::string &user_id);
+        void unblockEnsLookup(const std::string &sender, const std::string &name);
+        bool ensUserId(const std::string &full_name, std::string &userid, std::string &error);
+        std::vector<TargetCandidate> memberCandidates();
+        std::mutex mMemberCmdMutex;
         void updateNickNameCmd(const std::vector<std::string> &args);
         void deleteGroupCmd(const std::vector<std::string> &args);
         void agentCmd(const std::vector<std::string> &args);

@@ -52,3 +52,31 @@ both plain text and Markdown. Both replies go to the sender (the last argument
 Tests: `linux/tools/test_member_list.cpp`:
 
     g++ -std=c++14 -I linux/service/source/Tools -o test_member_list linux/tools/test_member_list.cpp
+
+## /del, /block, /unblock by number, userid or name (2026-11-24)
+
+Weili: "why not /del <userid> and /block <userid> or ens name? number need
+/list first". `/del`, `/block` and `/unblock` (creator only) take any of:
+
+| target | matched against |
+|---|---|
+| `12` (digits) | the `/list` number, as before |
+| `E1tkwT93jGoa…` (full userid) | the member's userid |
+| `E1tkwT93` (8+ base58 characters) | a userid prefix, like the short ids people see |
+| `rio`, `weili wang` | the display name, exactly, case-insensitive (spaces allowed) |
+| `rio.beagles.eth` | the display name; if no member has it, the name is looked up on the beagles.eth gateway (`GET /get/<full name>`, `texts.carrierUserId`; `owner` only when it is a Carrier userid) |
+
+If a name or prefix matches more than one member, nothing is done and the
+creator gets the matches with their numbers (at most 10 listed, under 1 KB):
+
+    "rio" matches 2 members, so nothing was done:
+    2: Rio (E1tkwT93…)
+    3: rio (E1tkwT94…)
+    Type /del <number> or the full userid.
+
+The creator cannot `/del` or `/block` themselves. `/unblock` takes a blocked
+user's name, userid, prefix or beagles.eth name. There is no numbered block
+list, so numbers don't apply. Blocked names are kept in `block_name_table`,
+because `block_member_table` holds only the userid.
+
+Tests: `linux/tools/test_member_target.cpp` (22 checks).
